@@ -3,7 +3,7 @@ import {
   Check, CheckCircle2, ChevronsUpDown, CircleAlert, Clock3, Copy, Download, Eye,
   EyeOff, FileCode2, FlaskConical, GitBranch as Github, History, House, KeyRound, Layers2,
   Menu, PanelLeftClose, Plus, RefreshCw, Save, ScanSearch, ShieldCheck,
-  Sparkles, Trash2,
+  Sparkles, Trash2, X,
 } from 'lucide';
 
 const iconSet = {
@@ -11,7 +11,7 @@ const iconSet = {
   Check, CheckCircle2, ChevronsUpDown, CircleAlert, Clock3, Copy, Download, Eye,
   EyeOff, FileCode2, FlaskConical, Github, History, House, KeyRound, Layers2,
   Menu, PanelLeftClose, Plus, RefreshCw, Save, ScanSearch, ShieldCheck,
-  Sparkles, Trash2,
+  Sparkles, Trash2, X,
 };
 type Evidence = { id: string; kind: string; title: string; url: string; text: string };
 type RunEvent = { kind: string; message: string; time: string };
@@ -26,6 +26,9 @@ type Run = {
 type Config = { ai: boolean; github: boolean; model: string; deployment: 'local' | 'server'; review_user: string; shared_key_next_at: string };
 type Usage = { total: number; ready: number; approved: number; failed: number; github_requests: number; tool_calls: number; input_tokens: number; output_tokens: number };
 type Connections = { openai_api_key: string; github_token: string };
+class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string, readonly retryAt?: string) { super(message); }
+}
 
 function $<T extends HTMLElement = HTMLElement>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -63,12 +66,61 @@ function updateConnections() {
 }
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch('/api' + path, {...options, headers: {'Content-Type':'application/json', ...options.headers}});
-  const data: { detail?: unknown } = response.headers.get('content-type')?.includes('application/json') ? await response.json() : {};
-  if (response.status === 401) throw Error('Maintainer password required or incorrect.');
-  if (!response.ok) throw Error(typeof data.detail === 'string' ? data.detail : 'Invalid request. Check the issue URL.');
+  const data: { detail?: unknown; code?: unknown; retry_at?: unknown } = response.headers.get('content-type')?.includes('application/json') ? await response.json() : {};
+  if (response.status === 401) throw new ApiError('Maintainer password required or incorrect.', 401);
+  if (!response.ok) throw new ApiError(
+    typeof data.detail === 'string' ? data.detail : 'The request could not be completed. Please try again.',
+    response.status,
+    typeof data.code === 'string' ? data.code : undefined,
+    typeof data.retry_at === 'string' ? data.retry_at : undefined,
+  );
   return data as T;
 }
-function notice(text: string) { clearTimeout(toastTimer); $('#notice').textContent = text; $('#notice').hidden = !text; if(text) toastTimer=setTimeout(()=>$('#notice').hidden=true,12000); }
+function notice(text: string) {
+  clearTimeout(toastTimer);
+  const element = $('#notice');
+  element.classList.remove('notice-limit');
+  element.setAttribute('role', 'status');
+  element.textContent = text;
+  element.hidden = !text;
+  if (text) toastTimer = setTimeout(() => element.hidden = true, 12000);
+}
+function showSharedKeyLimit(retryAt?: string) {
+  clearTimeout(toastTimer);
+  const element = $('#notice');
+  element.replaceChildren();
+  element.classList.add('notice-limit');
+  element.setAttribute('role', 'alert');
+  const content = document.createElement('div');
+  const title = document.createElement('strong');
+  title.textContent = 'Shared AI run limit reached';
+  const description = document.createElement('p');
+  const next = retryAt ? new Date(retryAt) : null;
+  description.textContent = `You get one shared AI run per hour. Add your own OpenAI API key for more runs without this limit.${next && !Number.isNaN(next.getTime()) ? ` The shared key is available again at ${next.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}.` : ''}`;
+  const action = document.createElement('a');
+  action.href = '#connections';
+  action.textContent = 'Add API key';
+  action.onclick = () => notice('');
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'notice-close';
+  close.setAttribute('aria-label', 'Dismiss message');
+  close.title = 'Dismiss message';
+  close.innerHTML = '<i data-lucide="x"></i>';
+  close.onclick = () => notice('');
+  content.append(title, description, action);
+  element.append(content, close);
+  element.hidden = false;
+  icons();
+}
+function showRequestError(error: unknown) {
+  if (error instanceof ApiError && error.status === 429 && error.code === 'shared_key_rate_limited') {
+    showSharedKeyLimit(error.retryAt);
+    api<Config>('/config').then(loaded => { config = loaded; updateConnections(); }).catch(() => {});
+    return;
+  }
+  notice(errorMessage(error));
+}
 function route() {
   const name = location.hash.slice(1).split('/')[0] || 'home';
   const view = ['home','new','investigate','usage','connections','docs'].includes(name) ? name : 'home';
@@ -125,7 +177,7 @@ function render() {
     recovery.onclick = async () => {
       recovery.disabled = true;
       try { const data = await api<Run>('/runs/' + current!.id + '/recover', {method:'POST',body:JSON.stringify({openai_api_key:personalConnections.openai_api_key || undefined})}); dirty = false; clearTimeout(timer); current = data; location.hash = 'investigate/' + data.id; render(); await loadHistory(); poll(); }
-      catch(e) {notice(errorMessage(e)); recovery.disabled = false;}
+      catch(e) {showRequestError(e); recovery.disabled = false;}
     };
     $('#panel-report').append(recovery);
   }
@@ -150,7 +202,7 @@ $("#start").addEventListener('submit', async event => {
   event.preventDefault(); if (!canLeave()) return;
   $<HTMLButtonElement>('#investigate').disabled = true; notice('');
   try { const data = await api<Run>('/runs', {method:'POST',body:JSON.stringify({url:$<HTMLInputElement>('#url').value.trim(),mode:$<HTMLInputElement>('#baseline').checked ? 'retrieval' : 'auto',openai_api_key:personalConnections.openai_api_key || undefined,github_token:personalConnections.github_token || undefined})}); dirty = false; clearTimeout(timer); current = data; location.hash='investigate/'+data.id; tab('report'); render(); await loadHistory(); poll(); }
-  catch(e) { notice(errorMessage(e)); } finally { $<HTMLButtonElement>('#investigate').disabled = false; }
+  catch(e) { showRequestError(e); } finally { $<HTMLButtonElement>('#investigate').disabled = false; }
 });
 function newRun() {if (!canLeave()) return; dirty=false;current=null;clearTimeout(timer);$('#workspace').hidden=true;$('#empty').hidden=false;$<HTMLInputElement>('#url').value='';location.hash='new';notice('');setTimeout(()=>$<HTMLInputElement>('#url').focus(),0);loadHistory().catch(e=>notice(errorMessage(e)));}
 $('#new').onclick = newRun;

@@ -227,7 +227,11 @@ func (s *Server) createQueuedRun(w http.ResponseWriter, run *Run, sharedKey bool
 	if !allowed {
 		s.release()
 		w.Header().Set("Retry-After", strconv.Itoa(max(1, int(time.Until(next).Seconds())+1)))
-		apiError(w, 429, "The shared AI key can start one investigation per hour. Add your own OpenAI key in Connections or retry after "+next.Format(time.RFC3339)+".")
+		jsonResponse(w, 429, map[string]string{
+			"code":     "shared_key_rate_limited",
+			"detail":   "The shared AI key allows one investigation per hour. Add your own OpenAI key to continue now.",
+			"retry_at": next.Format(time.RFC3339),
+		})
 		return false
 	}
 	return true

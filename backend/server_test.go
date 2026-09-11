@@ -21,7 +21,7 @@ func testServer(t *testing.T) *Server {
 func TestHomeAndAPI(t *testing.T) {
 	s := testServer(t)
 	h := s.handler()
-	for _, p := range []string{"/", "/favicon.svg", "/static/app.js", "/static/new.css", "/api/config", "/api/usage", "/api/runs", "/healthz"} {
+	for _, p := range []string{"/", "/favicon.svg", "/static/app.js", "/static/new.css", "/static/notice.css", "/api/config", "/api/usage", "/api/runs", "/healthz"} {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest("GET", p, nil))
 		if w.Code != 200 {
@@ -147,8 +147,8 @@ func TestSharedKeyLimitAndPersonalBypass(t *testing.T) {
 	if !strings.Contains(config.Body.String(), `"shared_key_next_at":"20`) {
 		t.Fatalf("shared key availability missing: %s", config.Body.String())
 	}
-	if w := post(shared); w.Code != 429 || w.Header().Get("Retry-After") == "" {
-		t.Fatalf("shared key not limited: %d %s", w.Code, w.Body.String())
+	if w := post(shared); w.Code != 429 || w.Header().Get("Retry-After") == "" || !strings.Contains(w.Body.String(), `"code":"shared_key_rate_limited"`) || !strings.Contains(w.Body.String(), `"retry_at":"20`) {
+		t.Fatalf("shared key limit response missing status or guidance: %d %s", w.Code, w.Body.String())
 	}
 	personal := `{"url":"https://github.com/acme/widget/issues/13","mode":"auto","openai_api_key":"personal-secret"}`
 	if w := post(personal); w.Code != 202 {
