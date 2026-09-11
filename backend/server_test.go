@@ -1,0 +1,189 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func testServer(t *testing.T) *Server {
+	t.Helper()
+	store, err := openStore(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return newServer(store, "../web/out")
+}
+
+func TestHomeAndAPI(t *testing.T) {
+	s := testServer(t)
+	h := s.handler()
+	for _, p := range []string{"/", "/favicon.svg", "/static/app.js", "/static/new.css", "/api/config", "/api/usage", "/api/runs", "/healthz"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", p, nil))
+		if w.Code != 200 {
+			t.Errorf("%s: %d", p, w.Code)
+		}
+	}
+	r := newRun("test", "acme/widget", 12, "retrieval")
+	r.Status = "ready"
+	r.Report = &Report{Summary: "summary", Draft: "draft"}
+	r.Draft = "draft"
+	if err := s.Store.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/runs/test", nil))
+	if w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/usage", nil))
+	var usage map[string]int
+	_ = json.Unmarshal(w.Body.Bytes(), &usage)
+	if usage["ready"] != 1 {
+		t.Fatalf("usage: %v", usage)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("PATCH", "/api/runs/test/review", strings.NewReader(`{"draft":"approved","approved":true}`)))
+	if w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/runs/test/export", nil))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "approved") {
+		t.Fatalf("export: %s", w.Body.String())
+	}
+}
+
+func TestDeployedGatewayAndOrigin(t *testing.T) {
+	s := testServer(t)
+	s.Deployed = true
+	s.Gateway = "gateway"
+	s.AllowedHost = "issuelens.me"
+	h := s.handler()
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "http://issuelens.me/api/runs", nil))
+	if w.Code != 401 {
+		t.Fatal(w.Code)
+	}
+	w = httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "http://issuelens.me/api/runs", nil)
+	req.Header.Set("X-Workspace-Gateway", "gateway")
+	h.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "http://issuelens.me/api/runs", strings.NewReader(`{}`))
+	req.Header.Set("X-Workspace-Gateway", "gateway")
+	req.Header.Set("Origin", "https://evil.test")
+	h.ServeHTTP(w, req)
+	if w.Code != 403 {
+		t.Fatal(w.Code)
+	}
+}
+
+func TestRunScopedKeysStayOutOfStorage(t *testing.T) {
+	s := testServer(t)
+	s.Deployed = true
+	s.DailyLimit = 10
+	s.launch = func(func()) {}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/runs", strings.NewReader(`{"url":"https://github.com/acme/widget/issues/12","mode":"auto","openai_api_key":"personal-secret","github_token":"gh-secret"}`))
+	s.start(w, req)
+	if w.Code != 202 {
+		t.Fatal(w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "personal-secret") || strings.Contains(w.Body.String(), "gh-secret") {
+		t.Fatal("key leaked in response")
+	}
+	var run Run
+	_ = json.Unmarshal(w.Body.Bytes(), &run)
+	saved, err := s.Store.Get(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(saved)
+	if strings.Contains(string(data), "personal-secret") || strings.Contains(string(data), "gh-secret") {
+		t.Fatal("key persisted")
+	}
+}
+
+func TestDailyLimit(t *testing.T) {
+	s := testServer(t)
+	s.Deployed = true
+	s.DailyLimit = 1
+	r := newRun("first", "acme/widget", 1, "retrieval")
+	_ = s.Store.Save(r)
+	if s.dailyOK() {
+		t.Fatal("daily limit not enforced")
+	}
+}
+
+func TestSharedKeyLimitAndPersonalBypass(t *testing.T) {
+	s := testServer(t)
+	s.Deployed = true
+	s.OpenAIKey = "shared-secret"
+	s.DailyLimit = 1
+	s.launch = func(func()) {}
+	if err := s.Store.Save(newRun("retrieval", "acme/widget", 1, "retrieval")); err != nil {
+		t.Fatal(err)
+	}
+	post := func(body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		s.start(w, httptest.NewRequest("POST", "/api/runs", strings.NewReader(body)))
+		return w
+	}
+	shared := `{"url":"https://github.com/acme/widget/issues/12","mode":"auto"}`
+	if w := post(shared); w.Code != 202 {
+		t.Fatal(w.Body.String())
+	}
+	config := httptest.NewRecorder()
+	s.config(config, httptest.NewRequest("GET", "/api/config", nil))
+	if !strings.Contains(config.Body.String(), `"shared_key_next_at":"20`) {
+		t.Fatalf("shared key availability missing: %s", config.Body.String())
+	}
+	if w := post(shared); w.Code != 429 || w.Header().Get("Retry-After") == "" {
+		t.Fatalf("shared key not limited: %d %s", w.Code, w.Body.String())
+	}
+	personal := `{"url":"https://github.com/acme/widget/issues/13","mode":"auto","openai_api_key":"personal-secret"}`
+	if w := post(personal); w.Code != 202 {
+		t.Fatalf("personal key should bypass shared and daily limits: %s", w.Body.String())
+	}
+	runs, err := s.Store.List(10)
+	if err != nil || len(runs) != 3 {
+		t.Fatalf("unexpected saved runs: %d %v", len(runs), err)
+	}
+}
+
+func TestRecoveryUsesSameSharedKeyLimit(t *testing.T) {
+	s := testServer(t)
+	s.OpenAIKey = "shared-secret"
+	s.launch = func(func()) {}
+	original := newRun("failed", "acme/widget", 12, "ai")
+	original.Status = "failed"
+	original.Evidence = []Evidence{{ID: "E1", Kind: "issue", Title: "Report", URL: original.URL, Text: "Failure"}}
+	if err := s.Store.Save(original); err != nil {
+		t.Fatal(err)
+	}
+	post := func(body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/runs/failed/recover", strings.NewReader(body))
+		req.SetPathValue("id", "failed")
+		s.recover(w, req)
+		return w
+	}
+	if w := post(`{}`); w.Code != 202 {
+		t.Fatal(w.Body.String())
+	}
+	if w := post(`{}`); w.Code != 429 {
+		t.Fatalf("recovery bypassed shared gate: %d %s", w.Code, w.Body.String())
+	}
+	if w := post(`{"openai_api_key":"personal-secret"}`); w.Code != 202 {
+		t.Fatalf("personal recovery blocked: %d %s", w.Code, w.Body.String())
+	}
+}
