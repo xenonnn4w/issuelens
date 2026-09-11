@@ -1,0 +1,15 @@
+{
+  "name": "issue-lens-web",
+  "private": true,
+  "scripts": {
+    "build": "npm run typecheck && esbuild src/app.ts --bundle --format=iife --target=es2022 --minify --outfile=out/static/app.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "lucide": "1.55.0"
+  }
+}
