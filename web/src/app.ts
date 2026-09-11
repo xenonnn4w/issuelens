@@ -1,0 +1,218 @@
+import {
+  createIcons, ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, ChartNoAxesCombined,
+  Check, CheckCircle2, ChevronsUpDown, CircleAlert, Clock3, Copy, Download, Eye,
+  EyeOff, FileCode2, FlaskConical, GitBranch as Github, History, House, KeyRound, Layers2,
+  Menu, PanelLeftClose, Plus, RefreshCw, Save, ScanSearch, ShieldCheck,
+  Sparkles, Trash2,
+} from 'lucide';
+
+const iconSet = {
+  ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, ChartNoAxesCombined,
+  Check, CheckCircle2, ChevronsUpDown, CircleAlert, Clock3, Copy, Download, Eye,
+  EyeOff, FileCode2, FlaskConical, Github, History, House, KeyRound, Layers2,
+  Menu, PanelLeftClose, Plus, RefreshCw, Save, ScanSearch, ShieldCheck,
+  Sparkles, Trash2,
+};
+type Evidence = { id: string; kind: string; title: string; url: string; text: string };
+type RunEvent = { kind: string; message: string; time: string };
+type Finding = { claim: string; evidence_ids: string[]; confidence: string };
+type InvestigationReport = { summary: string; findings: Finding[]; questions: string[]; limitations: string[]; draft: string };
+type Run = {
+  id: string; created: string; repo: string; number: number; url: string; title: string;
+  status: 'queued' | 'running' | 'ready' | 'failed'; mode: 'ai' | 'retrieval';
+  events: RunEvent[]; evidence: Evidence[]; report: InvestigationReport | null; draft: string;
+  approved: boolean; commit?: string; error?: string; recovered_from?: string;
+};
+type Config = { ai: boolean; github: boolean; model: string; deployment: 'local' | 'server'; review_user: string; shared_key_next_at: string };
+type Usage = { total: number; ready: number; approved: number; failed: number; github_requests: number; tool_calls: number; input_tokens: number; output_tokens: number };
+type Connections = { openai_api_key: string; github_token: string };
+
+function $<T extends HTMLElement = HTMLElement>(selector: string): T {
+  const element = document.querySelector<T>(selector);
+  if (!element) throw new Error(`Missing UI element: ${selector}`);
+  return element;
+}
+const esc = (value: unknown): string => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c] ?? c));
+const errorMessage = (error: unknown): string => error instanceof Error ? error.message : 'Unexpected error';
+let current: Run | null = null, timer: number | undefined, dirty = false, runs: Run[] = [], config: Config | null = null, toastTimer: number | undefined, reviewAuth: string | null = null;
+const connectionStorage = 'issue-lens-connections';
+let personalConnections: Connections = {openai_api_key: '', github_token: ''};
+function icons() { createIcons({ icons: iconSet }); }
+function loadConnections() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(connectionStorage) || '{}');
+    personalConnections = {openai_api_key: saved.openai_api_key || '', github_token: saved.github_token || ''};
+  } catch { personalConnections = {openai_api_key: '', github_token: ''}; }
+  $<HTMLInputElement>('#openai-key').value = personalConnections.openai_api_key;
+  $<HTMLInputElement>('#github-token').value = personalConnections.github_token;
+}
+function updateConnections() {
+  if (!config) return;
+  const personalAI = Boolean(personalConnections.openai_api_key);
+  const personalGitHub = Boolean(personalConnections.github_token);
+  const ai = personalAI || config.ai;
+  const next = config.shared_key_next_at ? new Date(config.shared_key_next_at) : null;
+  const sharedNote = next && next.getTime() > Date.now()
+    ? `Shared AI key available at ${next.toLocaleTimeString()}`
+    : 'Shared AI key · one investigation per hour';
+  $('#connection').textContent = ai ? config.model : 'Retrieval mode';
+  $('#mode-note').textContent = personalAI ? 'Your OpenAI key · no shared-key limit' : config.ai ? sharedNote : 'AI unavailable · Add an OpenAI key in Connections';
+  $('#new-github-status').textContent = personalGitHub ? 'Your token' : config.github ? 'Server token' : 'Public access';
+  $('#new-ai-status').textContent = personalAI ? 'Your key' : config.ai ? 'Shared key' : 'Key required';
+  $('#provider-status').innerHTML = `<div class="provider"><div><h2>GitHub</h2><p>Public issues, discussion, and commit-pinned repository code.</p></div><span class="badge">${personalGitHub ? 'Your token' : config.github ? 'Server token' : 'Unauthenticated access'}</span></div><div class="provider"><div><h2>AI provider</h2><p>${esc(config.model)} · ${esc(personalAI ? 'Your key has no shared-key limit' : config.ai ? sharedNote : 'Add your key for AI investigations')}</p></div><span class="badge">${personalAI ? 'Your key' : config.ai ? 'Shared key' : 'Key required'}</span></div><div class="provider"><div><h2>Workspace storage</h2><p>SQLite · Investigation history and reviewed responses</p></div><span class="badge">Available</span></div>`;
+}
+async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const response = await fetch('/api' + path, {...options, headers: {'Content-Type':'application/json', ...options.headers}});
+  const data: { detail?: unknown } = response.headers.get('content-type')?.includes('application/json') ? await response.json() : {};
+  if (response.status === 401) throw Error('Maintainer password required or incorrect.');
+  if (!response.ok) throw Error(typeof data.detail === 'string' ? data.detail : 'Invalid request. Check the issue URL.');
+  return data as T;
+}
+function notice(text: string) { clearTimeout(toastTimer); $('#notice').textContent = text; $('#notice').hidden = !text; if(text) toastTimer=setTimeout(()=>$('#notice').hidden=true,12000); }
+function route() {
+  const name = location.hash.slice(1).split('/')[0] || 'home';
+  const view = ['home','new','investigate','usage','connections','docs'].includes(name) ? name : 'home';
+  document.querySelectorAll<HTMLElement>('.page-view').forEach(p=>p.hidden=p.id!=='view-'+view);
+  document.querySelectorAll<HTMLElement>('[data-view]').forEach(a=>{const active=a.dataset.view===(view==='new'?'investigate':view);a.classList.toggle('active',active);a.setAttribute('aria-current',active?'page':'false');});
+  document.body.classList.remove('nav-open');
+  if(view==='usage' || view==='home') refreshUsage().catch(e=>notice(e.message));
+  const runId=location.hash.split('/')[1];
+  if(view==='investigate' && runId && current?.id!==runId) select(runId);
+}
+window.addEventListener('hashchange',route);
+function tab(name: string) {
+  document.querySelectorAll<HTMLElement>('[data-tab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
+  document.querySelectorAll<HTMLElement>('[role=tabpanel]').forEach(p => p.hidden = p.id !== 'panel-' + name);
+}
+document.querySelectorAll<HTMLElement>('[data-tab]').forEach(b => b.onclick = () => tab(b.dataset.tab || 'report'));
+async function loadHistory() {
+  runs = await api<Run[]>('/runs');
+  $('#count').textContent = String(runs.length);
+  $('#history-count').textContent = String(runs.length);
+  $('#history').innerHTML = runs.map(r => `<button data-run="${esc(r.id)}" class="${current?.id === r.id ? 'selected' : ''}">${esc(r.title)}<small>${esc(r.repo)} · ${esc(r.status)}</small></button>`).join('');
+  $('#recent').innerHTML = runs.length ? runs.slice(0,4).map(r=>`<button class="recent-item" data-run="${esc(r.id)}"><span>${esc(r.repo)} · #${esc(r.url.split('/').at(-1))}</span><p>${esc(r.title)}</p><small>${esc(r.status.toUpperCase())} / ${esc(r.mode==='ai'?'AI INVESTIGATION':'RETRIEVAL')}</small></button>`).join('') : '<div class="recent-empty"><h3>Your first investigation starts here.</h3><p>Open New investigation to collect repository evidence and prepare a response.</p></div>';
+  $('#activity-total').textContent=runs.length+' runs';
+  $('#repository-activity').innerHTML=runs.slice(0,4).map(r=>`<div class="activity-line"><i data-lucide="${r.status==='ready'?'check-circle-2':r.status==='failed'?'circle-alert':'clock-3'}"></i><div><p>${esc(r.title)}</p><small>${esc(r.repo)} · ${esc(new Date(r.created).toLocaleDateString())}</small></div><span class="badge">${esc(r.status)}</span></div>`).join('') || '<p class="muted">No repository activity yet.</p>';
+  document.querySelectorAll<HTMLElement>('[data-run]').forEach(b => b.onclick = () => { if (b.dataset.run) void select(b.dataset.run); });
+  icons();
+}
+function canLeave() { return !dirty || confirm('Discard unsaved response edits?'); }
+async function select(id: string) {
+  if (!canLeave()) return;
+  dirty = false; clearTimeout(timer); notice('');
+  try { current = await api<Run>('/runs/' + id); location.hash='investigate/'+id; render(); await loadHistory(); poll(); }
+  catch (e) { notice(errorMessage(e)); }
+}
+function render() {
+  if (!current) return;
+  $('#empty').hidden = true; $('#workspace').hidden = false;
+  $('#repo').textContent = current.repo + ' / #' + current.number;
+  $('#title').textContent = current.title;
+  $<HTMLAnchorElement>('#issue-link').href = current.url;
+  $('#run-status').textContent = (current.mode === 'ai' ? 'AI' : 'Retrieval') + ' · ' + current.status;
+  $('#source-count').textContent = String(current.evidence.length);
+  const report = current.report;
+  if (current.status === 'failed') notice(current.error || 'Investigation failed');
+  const evidence = current.evidence;
+  $('#panel-report').innerHTML = report ? `<p class="summary">${esc(report.summary)}</p><div class="section-heading"><h3>Findings</h3><span class="badge">${report.findings.length} observations</span></div>${report.findings.map(f => `<div class="finding"><p>${esc(f.claim)}</p><span class="badge">${esc(f.confidence)} confidence</span>${f.evidence_ids.map(id => {const e = evidence.find(e => e.id === id); return e ? `<a class="citation" href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">[${esc(id)}]</a>` : '';}).join('')}</div>`).join('')}<div class="section-heading"><h3>Open questions</h3></div><ul class="question-list">${report.questions.map(q => `<li>${esc(q)}</li>`).join('')}</ul><div class="limitations"><h3>Limits of this investigation</h3><ul>${report.limitations.map(q => `<li>${esc(q)}</li>`).join('')}</ul></div>` : `<div class="${current.status === 'failed' ? 'muted' : 'working'}">${current.status === 'failed' ? 'Investigation stopped. Collected evidence remains available. Submit the URL again to retry.' : esc(current.events.at(-1)?.message || 'Waiting for an available worker...')}</div>`;
+  $('#panel-sources').innerHTML = current.evidence.map(e => `<details class="source"><summary><span class="badge">${esc(e.id)} · ${esc(e.kind)}</span> ${esc(e.title)}</summary><pre>${esc(e.text)}</pre><a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">Open source on GitHub</a></details>`).join('') || '<p class="muted">No evidence collected yet.</p>';
+  $('#panel-activity').innerHTML = current.events.map(e => `<div class="event"><time>${esc(new Date(e.time).toLocaleTimeString())}</time><div><b>${esc(e.kind)}</b>${esc(e.message)}</div></div>`).join('');
+  if (!dirty) $<HTMLTextAreaElement>('#draft').value = current.draft || '';
+  if (current.status === 'failed' && !report) $('#panel-report').innerHTML = `<div class="limitations"><h3>Investigation stopped</h3><p>${esc(current.error || 'The investigation failed.')}</p><p>Collected evidence remains available in the Evidence tab. Submit the issue URL again to retry.</p></div>`;
+  if (current.status === 'failed' && current.evidence.length && (config?.ai || personalConnections.openai_api_key)) {
+    const recovery = document.createElement('button');
+    recovery.textContent = 'Generate report from saved evidence';
+    recovery.onclick = async () => {
+      recovery.disabled = true;
+      try { const data = await api<Run>('/runs/' + current!.id + '/recover', {method:'POST',body:JSON.stringify({openai_api_key:personalConnections.openai_api_key || undefined})}); dirty = false; clearTimeout(timer); current = data; location.hash = 'investigate/' + data.id; render(); await loadHistory(); poll(); }
+      catch(e) {notice(errorMessage(e)); recovery.disabled = false;}
+    };
+    $('#panel-report').append(recovery);
+  }
+  $<HTMLTextAreaElement>('#draft').disabled = !report;
+  $<HTMLButtonElement>('#save').disabled = !report;
+  $<HTMLButtonElement>('#approve').disabled = !report;
+  $<HTMLButtonElement>('#copy').disabled = !current.approved || dirty;
+  $('#approval').textContent = current.approved && !dirty ? 'Approved locally' : 'Unreviewed';
+  $('#snapshot').textContent = current.commit ? 'SNAPSHOT ' + current.commit.slice(0,12) : current.recovered_from ? 'Recovered from saved evidence · Original source links preserved' : 'Evidence is saved locally';
+  $('#export').hidden = !report; $<HTMLAnchorElement>('#export').href = '/api/runs/' + current.id + '/export';
+  icons();
+}
+function poll() {
+  if (!current || !['queued','running'].includes(current.status)) return;
+  const id = current.id;
+  timer = setTimeout(async () => {
+    try { const data = await api<Run>('/runs/' + id); if (current?.id !== id) return; current = data; render(); await loadHistory(); if (!['queued','running'].includes(data.status)) await refreshUsage(); poll(); }
+    catch (e) { notice(errorMessage(e)); }
+  }, 1400);
+}
+$("#start").addEventListener('submit', async event => {
+  event.preventDefault(); if (!canLeave()) return;
+  $<HTMLButtonElement>('#investigate').disabled = true; notice('');
+  try { const data = await api<Run>('/runs', {method:'POST',body:JSON.stringify({url:$<HTMLInputElement>('#url').value.trim(),mode:$<HTMLInputElement>('#baseline').checked ? 'retrieval' : 'auto',openai_api_key:personalConnections.openai_api_key || undefined,github_token:personalConnections.github_token || undefined})}); dirty = false; clearTimeout(timer); current = data; location.hash='investigate/'+data.id; tab('report'); render(); await loadHistory(); poll(); }
+  catch(e) { notice(errorMessage(e)); } finally { $<HTMLButtonElement>('#investigate').disabled = false; }
+});
+function newRun() {if (!canLeave()) return; dirty=false;current=null;clearTimeout(timer);$('#workspace').hidden=true;$('#empty').hidden=false;$<HTMLInputElement>('#url').value='';location.hash='new';notice('');setTimeout(()=>$<HTMLInputElement>('#url').focus(),0);loadHistory().catch(e=>notice(errorMessage(e)));}
+$('#new').onclick = newRun;
+$('#empty-new').onclick=newRun;
+$('#open-investigate').onclick=newRun;
+$('#collapse').onclick=()=>{if(innerWidth<=640){document.body.classList.toggle('nav-open');}else{document.body.classList.toggle('collapsed');}};
+$('#mobile-menu').onclick=()=>document.body.classList.toggle('nav-open');
+$('#workspace-menu').onclick=()=>{location.hash='connections';};
+$("#connection-form").addEventListener('submit', event => {
+  event.preventDefault();
+  personalConnections = {openai_api_key: $<HTMLInputElement>('#openai-key').value.trim(), github_token: $<HTMLInputElement>('#github-token').value.trim()};
+  try {
+    if (personalConnections.openai_api_key || personalConnections.github_token) sessionStorage.setItem(connectionStorage, JSON.stringify(personalConnections));
+    else sessionStorage.removeItem(connectionStorage);
+  } catch { notice('Browser storage is unavailable. Keys will work until this page reloads.'); updateConnections(); return; }
+  updateConnections();
+  notice('Connections saved for this browser tab.');
+});
+$('#clear-connections').onclick = () => {
+  try { sessionStorage.removeItem(connectionStorage); } catch {}
+  personalConnections = {openai_api_key: '', github_token: ''};
+  $<HTMLInputElement>('#openai-key').value = $<HTMLInputElement>('#github-token').value = '';
+  updateConnections();
+  notice('Browser-tab connections cleared.');
+};
+document.querySelectorAll<HTMLElement>('[data-toggle-secret]').forEach(button => button.onclick = () => {
+  const field = $<HTMLInputElement>('#' + button.dataset.toggleSecret);
+  const visible = field.type === 'password';
+  field.type = visible ? 'text' : 'password';
+  button.setAttribute('aria-pressed', String(visible));
+  button.innerHTML = `<i data-lucide="${visible ? 'eye-off' : 'eye'}"></i>`;
+  icons();
+});
+$('#draft').oninput = () => {dirty=true;$<HTMLButtonElement>('#copy').disabled=true;$('#approval').textContent='Unsaved edits';};
+async function save(approved: boolean) {
+  if (!current) return;
+  if (config?.deployment === 'server' && !reviewAuth) {
+    const password = prompt('Maintainer password to edit or approve this response');
+    if (password === null) return;
+    reviewAuth = 'Basic ' + btoa((config.review_user || 'maintainer') + ':' + password);
+  }
+  $<HTMLButtonElement>('#save').disabled = $<HTMLButtonElement>('#approve').disabled = true;
+  try { current = await api<Run>('/runs/' + current.id + '/review',{method:'PATCH',headers:reviewAuth ? {Authorization:reviewAuth} : {},body:JSON.stringify({draft:$<HTMLTextAreaElement>('#draft').value,approved})}); dirty=false;render();await loadHistory();await refreshUsage();notice(approved ? 'Response approved locally. You can now copy it for GitHub.' : 'Draft saved.'); }
+  catch(e) {if (errorMessage(e).includes('password')) reviewAuth = null; notice(errorMessage(e));} finally {$<HTMLButtonElement>('#save').disabled = $<HTMLButtonElement>('#approve').disabled = !current?.report;}
+}
+$('#save').onclick = () => save(false); $('#approve').onclick = () => save(true);
+$('#copy').onclick = async () => {
+  try { if (!current) return; await navigator.clipboard.writeText(current.draft); notice('Approved response copied.'); } catch {notice('Clipboard unavailable. Select the response text to copy it manually.');}
+};
+window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='';}});
+async function refreshUsage() {
+  const u=await api<Usage>('/usage');
+  $('#usage-preview').innerHTML=`<div class="usage-mini"><div><strong>${u.total}</strong><span>Investigations</span></div><div><strong>${u.ready}</strong><span>Completed</span></div></div>`;
+  const stats=[['Investigations',u.total],['Completed',u.ready],['Approved drafts',u.approved],['Failed',u.failed],['GitHub requests',u.github_requests],['Tool operations',u.tool_calls],['Input tokens',u.input_tokens],['Output tokens',u.output_tokens]];
+  $('#usage-stats').innerHTML=stats.map(([label,n])=>`<div class="stat"><span>${label}</span><strong>${Number(n).toLocaleString()}</strong></div>`).join('');
+  $('#usage-table').innerHTML='<div class="table-wrap"><table><thead><tr><th>Investigation</th><th>Mode</th><th>Status</th><th>Created</th></tr></thead><tbody>'+runs.map(r=>`<tr><td><a href="#investigate/${esc(r.id)}">${esc(r.title)}</a></td><td>${esc(r.mode)}</td><td>${esc(r.status)}</td><td>${esc(new Date(r.created).toLocaleDateString())}</td></tr>`).join('')+'</tbody></table></div>';
+}
+$('#refresh-usage').onclick=()=>refreshUsage().catch(e=>notice(errorMessage(e)));
+async function boot() {
+  icons(); loadConnections(); route();
+  try {const loaded = await api<Config>('/config'); config=loaded;$('#workspace-type').textContent=loaded.deployment==='local'?'Local workspace':'Public workspace';updateConnections();await loadHistory();await refreshUsage();}
+  catch(e){notice(errorMessage(e));$('#connection').textContent='Disconnected';}
+  if (current) render();
+}
+boot();
