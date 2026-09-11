@@ -1,0 +1,40 @@
+name: issue-lens
+services:
+  api:
+    build:
+      context: ../backend
+    env_file: ${ENV_FILE:-.env}
+    environment:
+      DEPLOYED: "1"
+      ISSUE_LENS_DB: /data/investigations.sqlite3
+      LISTEN_ADDR: 0.0.0.0:8080
+      WEB_ROOT: /app/web/out
+      ALLOWED_HOSTS: ${DOMAIN:?Set DOMAIN}
+    volumes:
+      - investigations:/data
+      - ../web/out:/app/web/out:ro
+    expose: ["8080"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      api:
+        condition: service_healthy
+    env_file: ${ENV_FILE:-.env}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+volumes:
+  investigations:
+  caddy-data:
+  caddy-config:
