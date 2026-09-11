@@ -1,0 +1,17 @@
+.new-layout{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:48px;max-width:1100px;padding:36px 0}
+.new-form{min-width:0;max-width:650px}
+.new-form>label{display:block;margin-bottom:9px;font-size:12px;font-weight:500}
+.new-form>#url{display:block;width:100%;min-height:44px;border:1px solid #d8d8d8;background:#fff;padding:11px 13px;font-size:13px}
+.new-form>#url:focus{border-color:#171717}
+.new-form .form-options{margin:18px 0 10px}
+.new-form #mode-note{display:block;min-height:20px}
+.new-actions{display:flex;align-items:center;gap:10px;margin-top:28px}
+.new-actions .secondary{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:10px 16px;border:1px solid #d8d8d8;color:#333}
+.new-actions button{min-height:42px}
+.new-context{min-width:0;border-left:1px solid var(--line);padding-left:24px}
+.new-context .section-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.new-context .section-heading h3{margin:0}
+.new-context>div:not(.section-heading){display:grid;grid-template-columns:18px minmax(0,1fr) auto;align-items:center;gap:9px;min-height:50px;border-top:1px solid var(--line);font-size:12px}
+.new-context>div:not(.section-heading) .badge{font-size:10px;white-space:normal;text-align:right}
+@media(max-width:800px){.new-layout{grid-template-columns:1fr;gap:32px}.new-context{border-left:0;border-top:1px solid var(--line);padding:24px 0 0;max-width:650px}}
+@media(max-width:480px){.new-layout{padding:28px 0}.new-actions{flex-wrap:wrap}.new-actions button{flex:1}.new-context>div:not(.section-heading){grid-template-columns:18px minmax(0,1fr) auto}}
