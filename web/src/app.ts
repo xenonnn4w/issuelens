@@ -306,6 +306,7 @@ async function syncSession() {
     loadConnections(); updateConnections(); route();
     try { await loadHistory(); await refreshUsage(); } catch (error) { notice(errorMessage(error)); }
   } else {
+    if (!location.pathname.startsWith('/sign-')) history.replaceState(null, '', '/sign-in');
     $('#auth-screen').hidden = false;
     clerk.unmountUserButton($<HTMLDivElement>('#user-button'));
     $<HTMLDivElement>('#user-button').replaceChildren();
