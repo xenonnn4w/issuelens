@@ -21,7 +21,7 @@ func testServer(t *testing.T) *Server {
 func TestHomeAndAPI(t *testing.T) {
 	s := testServer(t)
 	h := s.handler()
-	for _, p := range []string{"/", "/favicon.svg", "/static/app.js", "/static/new.css", "/static/notice.css", "/api/config", "/api/usage", "/api/runs", "/healthz"} {
+	for _, p := range []string{"/", "/favicon.svg", "/static/app.js", "/static/new.css", "/static/notice.css", "/static/mobile.css", "/api/config", "/api/usage", "/api/runs", "/healthz"} {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest("GET", p, nil))
 		if w.Code != 200 {

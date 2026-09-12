@@ -258,7 +258,7 @@ async function refreshUsage() {
   $('#usage-preview').innerHTML=`<div class="usage-mini"><div><strong>${u.total}</strong><span>Investigations</span></div><div><strong>${u.ready}</strong><span>Completed</span></div></div>`;
   const stats=[['Investigations',u.total],['Completed',u.ready],['Approved drafts',u.approved],['Failed',u.failed],['GitHub requests',u.github_requests],['Tool operations',u.tool_calls],['Input tokens',u.input_tokens],['Output tokens',u.output_tokens]];
   $('#usage-stats').innerHTML=stats.map(([label,n])=>`<div class="stat"><span>${label}</span><strong>${Number(n).toLocaleString()}</strong></div>`).join('');
-  $('#usage-table').innerHTML='<div class="table-wrap"><table><thead><tr><th>Investigation</th><th>Mode</th><th>Status</th><th>Created</th></tr></thead><tbody>'+runs.map(r=>`<tr><td><a href="#investigate/${esc(r.id)}">${esc(r.title)}</a></td><td>${esc(r.mode)}</td><td>${esc(r.status)}</td><td>${esc(new Date(r.created).toLocaleDateString())}</td></tr>`).join('')+'</tbody></table></div>';
+  $('#usage-table').innerHTML='<div class="table-wrap"><table><thead><tr><th>Investigation</th><th>Mode</th><th>Status</th><th>Created</th></tr></thead><tbody>'+runs.map(r=>`<tr><td><a href="#investigate/${esc(r.id)}">${esc(r.title)}</a></td><td data-label="Mode">${esc(r.mode)}</td><td data-label="Status">${esc(r.status)}</td><td data-label="Created">${esc(new Date(r.created).toLocaleDateString())}</td></tr>`).join('')+'</tbody></table></div>';
 }
 $('#refresh-usage').onclick=()=>refreshUsage().catch(e=>notice(errorMessage(e)));
 async function boot() {
