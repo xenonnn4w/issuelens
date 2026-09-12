@@ -154,6 +154,25 @@ func TestCIRejectsUnsupportedRunsAndUnavailableLogs(t *testing.T) {
 	}
 }
 
+func TestCILogErrorsDistinguishAccessFromRetention(t *testing.T) {
+	for _, tc := range []struct {
+		status  int
+		message string
+	}{
+		{401, "denied access"}, {403, "denied access"}, {404, "unavailable or deleted"}, {410, "unavailable or deleted"},
+	} {
+		server := mockCI(t, "completed", "failure", false, tc.status)
+		g := newGitHub("acme/widget", 123, "")
+		g.CI = true
+		g.BaseURL = server.URL
+		err := g.InitializeCI(context.Background(), 2, func(string, string) {})
+		server.Close()
+		if err == nil || !strings.Contains(err.Error(), tc.message) {
+			t.Fatalf("HTTP %d: %v", tc.status, err)
+		}
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

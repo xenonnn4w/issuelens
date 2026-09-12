@@ -92,6 +92,12 @@ func failedConclusion(value string) bool {
 	return value == "failure" || value == "timed_out" || value == "startup_failure" || value == "action_required"
 }
 
+type logHTTPError struct{ status int }
+
+func (e *logHTTPError) Error() string {
+	return fmt.Sprintf("GitHub log request returned HTTP %d", e.status)
+}
+
 func (g *GitHub) InitializeCI(ctx context.Context, attempt int, emit emitFunc) error {
 	var repository struct {
 		Private bool `json:"private"`
@@ -137,6 +143,8 @@ func (g *GitHub) InitializeCI(ctx context.Context, attempt int, emit emitFunc) e
 	}
 	failed := 0
 	logs := 0
+	accessDenied := false
+	logsMissing := false
 	for _, job := range jobs.Jobs {
 		if !failedConclusion(job.Conclusion) {
 			continue
@@ -154,6 +162,11 @@ func (g *GitHub) InitializeCI(ctx context.Context, attempt int, emit emitFunc) e
 		g.add("job", "Job: "+job.Name, jobLink, summary.String())
 		logText, err := g.jobLog(ctx, job.ID)
 		if err != nil {
+			var httpError *logHTTPError
+			if errors.As(err, &httpError) {
+				accessDenied = accessDenied || httpError.status == 401 || httpError.status == 403
+				logsMissing = logsMissing || httpError.status == 404 || httpError.status == 410
+			}
 			g.Warnings = append(g.Warnings, fmt.Sprintf("Logs for job %d unavailable: %s", job.ID, err.Error()))
 			continue
 		}
@@ -167,6 +180,12 @@ func (g *GitHub) InitializeCI(ctx context.Context, attempt int, emit emitFunc) e
 		return errors.New("GitHub exposes no failed jobs for this attempt. The workflow may have failed before a job started, or job data may be unavailable.")
 	}
 	if logs == 0 {
+		if accessDenied {
+			return errors.New("GitHub denied access to this run's logs. Add a GitHub token with Actions read and Contents read access for this repository in Connections, then retry. Public workflow pages do not guarantee anonymous API log access.")
+		}
+		if logsMissing {
+			return errors.New("GitHub reports that this run's logs are unavailable or deleted. Choose a newer failed run with retained logs.")
+		}
 		return errors.New("No failed-job logs could be collected. Logs may have expired; add a GitHub token with Actions read access in Connections and retry.")
 	}
 	emit("snapshot", "Reading workflow and commit changes at the failed run's head commit")
@@ -264,7 +283,7 @@ func (g *GitHub) jobLog(ctx context.Context, id int) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GitHub log request returned HTTP %d", resp.StatusCode)
+		return "", &logHTTPError{status: resp.StatusCode}
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
 	if err != nil {
