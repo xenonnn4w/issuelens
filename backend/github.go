@@ -69,19 +69,21 @@ type treeFile struct {
 	Size int    `json:"size"`
 }
 type GitHub struct {
-	Client   *http.Client
-	BaseURL  string
-	Repo     string
-	Number   int
-	Token    string
-	SHA      string
-	Issue    map[string]any
-	Evidence []Evidence
-	Warnings []string
-	Requests int
-	Metrics  Metrics
-	Tree     map[string]treeFile
-	Files    map[string][]string
+	Client    *http.Client
+	BaseURL   string
+	Repo      string
+	Number    int
+	CI        bool
+	CIAttempt int
+	Token     string
+	SHA       string
+	Issue     map[string]any
+	Evidence  []Evidence
+	Warnings  []string
+	Requests  int
+	Metrics   Metrics
+	Tree      map[string]treeFile
+	Files     map[string][]string
 }
 
 func newGitHub(repo string, number int, token string) *GitHub {
@@ -124,8 +126,12 @@ func (g *GitHub) get(ctx context.Context, endpoint string, query url.Values, dst
 }
 
 func (g *GitHub) add(kind, title, link, text string) Evidence {
+	if g.CI {
+		text = redactCI(text, g.Token)
+		title = redactCI(title, g.Token)
+	}
 	for _, e := range g.Evidence {
-		if e.URL == link {
+		if e.URL == link && e.Kind == kind {
 			return e
 		}
 	}

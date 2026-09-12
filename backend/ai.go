@@ -109,7 +109,15 @@ func toolResult(ctx context.Context, g *GitHub, call toolCall) (any, error) {
 
 func aiInvestigate(ctx context.Context, g *GitHub, emit emitFunc, key, model, baseURL string) (*Report, error) {
 	issueData, _ := json.Marshal(map[string]any{"issue": g.Issue, "evidence": g.Evidence})
-	messages := []chatMessage{{Role: "system", Content: systemPrompt}, {Role: "user", Content: string(issueData)}}
+	prompt := systemPrompt
+	snapshotLimit := "Code was inspected at the current default-branch snapshot. No reproduction tests were executed."
+	data := string(issueData)
+	if g.CI {
+		prompt = ciSystemPrompt
+		snapshotLimit = "Code was inspected at the failed run's head commit. No workflow or tests were executed; proposed fixes remain unverified."
+		data = redactCI(data, g.Token)
+	}
+	messages := []chatMessage{{Role: "system", Content: prompt}, {Role: "user", Content: data}}
 	seen := map[string]bool{}
 	calls := 0
 	noProgress := 0
@@ -144,7 +152,7 @@ func aiInvestigate(ctx context.Context, g *GitHub, emit emitFunc, key, model, ba
 				var report Report
 				if err := json.Unmarshal([]byte(call.Function.Arguments), &report); err == nil {
 					limits := append([]string{}, g.Warnings...)
-					limits = append(limits, "Code was inspected at the current default-branch snapshot. No reproduction tests were executed.")
+					limits = append(limits, snapshotLimit)
 					if finishReason != "" {
 						limits = append(limits, finishReason)
 					}
@@ -185,7 +193,11 @@ func aiInvestigate(ctx context.Context, g *GitHub, emit emitFunc, key, model, ba
 
 func recoverReport(ctx context.Context, run *Run, emit emitFunc, key, model, baseURL string) (*Report, Metrics, error) {
 	user, _ := json.Marshal(map[string]any{"issue": run.Title, "evidence": run.Evidence, "previous_failure": run.PreviousFailure})
-	messages := []chatMessage{{Role: "system", Content: systemPrompt + " Exploration has ended. Use only saved evidence and submit a report now."}, {Role: "user", Content: string(user)}}
+	prompt := systemPrompt
+	if run.Kind == "ci" {
+		prompt = ciSystemPrompt
+	}
+	messages := []chatMessage{{Role: "system", Content: prompt + " Exploration has ended. Use only saved evidence and submit a report now."}, {Role: "user", Content: string(user)}}
 	metrics := Metrics{}
 	for attempt := 0; attempt < 2; attempt++ {
 		emit("finalize", fmt.Sprintf("Generating report from saved evidence (%d/2); no GitHub requests", attempt+1))

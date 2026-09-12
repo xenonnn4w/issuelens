@@ -41,6 +41,7 @@ type Metrics struct {
 type Run struct {
 	ID              string     `json:"id"`
 	OwnerID         string     `json:"owner_id"`
+	Kind            string     `json:"kind,omitempty"`
 	Created         string     `json:"created"`
 	Repo            string     `json:"repo"`
 	Number          int        `json:"number"`

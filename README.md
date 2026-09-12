@@ -1,6 +1,6 @@
 # Issue Lens
 
-Issue Lens investigates public GitHub bug reports, retrieves related issues and commit-pinned code, and prepares cited findings and a response draft for maintainer review. The backend is written in Go; the browser console is built from strict TypeScript and CSS. The service uses SQLite for its single-instance job history, Docker Compose, Caddy, and GitHub Actions on AWS EC2.
+Issue Lens investigates public GitHub bug reports and failed GitHub Actions runs. It retrieves commit-pinned evidence and prepares cited findings and a response draft for maintainer review. The backend is written in Go; the browser console is built from strict TypeScript and CSS. The service uses SQLite for its single-instance job history, Docker Compose, Caddy, and GitHub Actions on AWS EC2.
 
 ## Run locally
 
@@ -25,6 +25,14 @@ Signed-in users can also add their own OpenAI and GitHub keys in **Connections**
 5. The maintainer can edit and approve the response draft, copy it, or download a Markdown report. Issue Lens never posts to GitHub.
 
 Two investigations run concurrently and at most six may be active or queued. Each investigation has a 36-request GitHub budget, 10 model turns, 18 tool calls, and a six-minute timeout. The shared server OpenAI key starts at most one AI investigation or recovery per rolling hour, enforced in SQLite; a visitor's own OpenAI key bypasses that allowance. Retrieval-only runs without a personal key retain a 10-per-UTC-day default cap (`PUBLIC_DAILY_RUN_LIMIT`). A single Go process owns the in-memory job queue; SQLite is not a distributed job broker.
+
+## CI Failure Investigator
+
+Choose **CI failure** on New investigation and paste `https://github.com/owner/repo/actions/runs/123`. Run-attempt and job URLs are accepted; a job URL investigates the run's latest attempt, while an explicit `/attempts/2` URL keeps that attempt. Only completed failed runs in public repositories are supported.
+
+The collector reads metadata for up to 100 jobs and downloads logs for up to three failed jobs. It retains failure windows and the job tail from at most 1 MiB per job, reads the workflow at the run's head commit, and collects patches for up to ten changed files. The AI agent can inspect more pinned files using the existing tools and proposes a diagnosis, targeted changes, and verification commands. It never runs workflows, applies fixes, or posts to GitHub. Retrieval mode collects evidence without AI diagnosis.
+
+GitHub may require a token for log access. Add a fine-grained token with **Actions: Read** and **Contents: Read** for the target public repository in Connections. Deleted or expired logs cannot be recovered. Signed log-storage URLs are fetched without forwarding GitHub credentials and are never saved as evidence links. Common credentials are redacted before logs reach storage or the model, but redaction is not exhaustive. In AI mode, collected workflow logs and changes are sent to the configured model provider. CI runs share the existing queue, authentication, ownership, and shared-key allowance.
 
 ## Deployment
 

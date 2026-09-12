@@ -224,7 +224,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	}
 	items := []map[string]any{}
 	for _, run := range runs {
-		items = append(items, map[string]any{"id": run.ID, "created": run.Created, "url": run.URL, "title": run.Title, "repo": run.Repo, "status": run.Status, "mode": run.Mode, "approved": run.Approved})
+		items = append(items, map[string]any{"id": run.ID, "created": run.Created, "url": run.URL, "title": run.Title, "repo": run.Repo, "status": run.Status, "mode": run.Mode, "kind": run.Kind, "number": run.Number, "approved": run.Approved})
 	}
 	jsonResponse(w, 200, items)
 }
@@ -281,6 +281,7 @@ func (s *Server) createQueuedRun(w http.ResponseWriter, run *Run, sharedKey bool
 func (s *Server) start(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		URL         string `json:"url"`
+		Kind        string `json:"kind"`
 		Mode        string `json:"mode"`
 		OpenAIKey   string `json:"openai_api_key"`
 		GitHubToken string `json:"github_token"`
@@ -289,7 +290,21 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 422, "Invalid investigation request")
 		return
 	}
-	repo, number, err := parseIssue(input.URL)
+	if input.Kind == "" {
+		input.Kind = "issue"
+	}
+	if input.Kind != "issue" && input.Kind != "ci" {
+		apiError(w, 422, "Choose an issue or CI investigation")
+		return
+	}
+	var repo string
+	var number, attempt int
+	var err error
+	if input.Kind == "ci" {
+		repo, number, attempt, err = parseCI(input.URL)
+	} else {
+		repo, number, err = parseIssue(input.URL)
+	}
 	if err != nil {
 		apiError(w, 422, err.Error())
 		return
@@ -314,6 +329,11 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run := newRun(newID(), repo, number, mode)
+	run.Kind = input.Kind
+	if input.Kind == "ci" {
+		run.URL = ciURL(repo, number, attempt)
+		run.Title = fmt.Sprintf("CI run #%d", number)
+	}
 	run.OwnerID = userID(r)
 	if !s.createQueuedRun(w, run, mode == "ai" && input.OpenAIKey == "") {
 		return
@@ -343,11 +363,23 @@ func (s *Server) runJob(id, mode, openaiKey, githubToken string) {
 		githubToken = s.GitHubToken
 	}
 	g := newGitHub(run.Repo, run.Number, githubToken)
+	g.CI = run.Kind == "ci"
+	if g.CI {
+		_, _, g.CIAttempt, _ = parseCI(run.URL)
+	}
 	emit := func(kind, message string) {
 		run.Events = append(run.Events, Event{Kind: kind, Message: message, Time: time.Now().UTC().Format(time.RFC3339Nano)})
 		run.Evidence = append([]Evidence{}, g.Evidence...)
 		if title, ok := g.Issue["title"].(string); ok {
 			run.Title = title
+			if g.CI {
+				run.Title = redactCI(title, githubToken)
+			}
+		}
+		if g.CI {
+			if link, ok := g.Issue["url"].(string); ok {
+				run.URL = link
+			}
 		}
 		_ = s.Store.Save(run)
 	}
@@ -523,7 +555,11 @@ func (s *Server) export(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=issue-%d-report.md", run.Number))
+	prefix := "issue"
+	if run.Kind == "ci" {
+		prefix = "ci"
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s-%d-report.md", prefix, run.Number))
 	_, _ = w.Write([]byte(markdown(run)))
 }
 

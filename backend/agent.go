@@ -78,6 +78,17 @@ func baseline(ctx context.Context, g *GitHub, emit emitFunc) (*Report, error) {
 }
 
 func investigate(ctx context.Context, g *GitHub, emit emitFunc, mode, key, model, baseURL string) (*Report, string, error) {
+	if g.CI {
+		emit("fetch", "Fetching failed workflow run and repository metadata")
+		if err := g.InitializeCI(ctx, g.CIAttempt, emit); err != nil {
+			return nil, "", err
+		}
+		if mode == "retrieval" || key == "" {
+			return ciBaseline(g), "retrieval", nil
+		}
+		r, err := aiInvestigate(ctx, g, emit, key, model, baseURL)
+		return r, "ai", err
+	}
 	emit("fetch", "Fetching issue, discussion, and repository snapshot")
 	if err := g.Initialize(ctx); err != nil {
 		return nil, "", err
