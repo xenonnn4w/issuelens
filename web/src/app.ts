@@ -3,7 +3,7 @@ import {
   Check, CheckCircle2, ChevronsUpDown, CircleAlert, Clock3, Copy, Download, Eye,
   EyeOff, FileCode2, FlaskConical, GitBranch as Github, History, House, KeyRound, Layers2,
   Menu, PanelLeftClose, Plus, RefreshCw, Save, ScanSearch, ShieldCheck,
-  Sparkles, Trash2, X,
+  Sparkles, TerminalSquare, Trash2, X,
 } from 'lucide';
 import { Clerk } from '@clerk/clerk-js';
 import { ClerkUI } from '@clerk/ui/entry';
@@ -13,7 +13,7 @@ const iconSet = {
   Check, CheckCircle2, ChevronsUpDown, CircleAlert, Clock3, Copy, Download, Eye,
   EyeOff, FileCode2, FlaskConical, Github, History, House, KeyRound, Layers2,
   Menu, PanelLeftClose, Plus, RefreshCw, Save, ScanSearch, ShieldCheck,
-  Sparkles, Trash2, X,
+  Sparkles, TerminalSquare, Trash2, X,
 };
 type Evidence = { id: string; kind: string; title: string; url: string; text: string };
 type RunEvent = { kind: string; message: string; time: string };
@@ -22,6 +22,7 @@ type InvestigationReport = { summary: string; findings: Finding[]; questions: st
 type Run = {
   id: string; created: string; repo: string; number: number; url: string; title: string;
   status: 'queued' | 'running' | 'ready' | 'failed'; mode: 'ai' | 'retrieval';
+  kind?: 'issue' | 'ci';
   events: RunEvent[]; evidence: Evidence[]; report: InvestigationReport | null; draft: string;
   approved: boolean; commit?: string; error?: string; recovered_from?: string;
 };
@@ -155,7 +156,7 @@ async function loadHistory() {
   $('#count').textContent = String(runs.length);
   $('#history-count').textContent = String(runs.length);
   $('#history').innerHTML = runs.map(r => `<button data-run="${esc(r.id)}" class="${current?.id === r.id ? 'selected' : ''}">${esc(r.title)}<small>${esc(r.repo)} · ${esc(r.status)}</small></button>`).join('');
-  $('#recent').innerHTML = runs.length ? runs.slice(0,4).map(r=>`<button class="recent-item" data-run="${esc(r.id)}"><span>${esc(r.repo)} · #${esc(r.url.split('/').at(-1))}</span><p>${esc(r.title)}</p><small>${esc(r.status.toUpperCase())} / ${esc(r.mode==='ai'?'AI INVESTIGATION':'RETRIEVAL')}</small></button>`).join('') : '<div class="recent-empty"><h3>Your first investigation starts here.</h3><p>Open New investigation to collect repository evidence and prepare a response.</p></div>';
+  $('#recent').innerHTML = runs.length ? runs.slice(0,4).map(r=>`<button class="recent-item" data-run="${esc(r.id)}"><span>${esc(r.repo)} · ${r.kind==='ci'?'CI run ':''}#${esc(r.number)}</span><p>${esc(r.title)}</p><small>${esc(r.status.toUpperCase())} / ${esc(r.mode==='ai'?'AI INVESTIGATION':'RETRIEVAL')}</small></button>`).join('') : '<div class="recent-empty"><h3>Your first investigation starts here.</h3><p>Open New investigation to collect repository evidence and prepare a response.</p></div>';
   $('#activity-total').textContent=runs.length+' runs';
   $('#repository-activity').innerHTML=runs.slice(0,4).map(r=>`<div class="activity-line"><i data-lucide="${r.status==='ready'?'check-circle-2':r.status==='failed'?'circle-alert':'clock-3'}"></i><div><p>${esc(r.title)}</p><small>${esc(r.repo)} · ${esc(new Date(r.created).toLocaleDateString())}</small></div><span class="badge">${esc(r.status)}</span></div>`).join('') || '<p class="muted">No repository activity yet.</p>';
   document.querySelectorAll<HTMLElement>('[data-run]').forEach(b => b.onclick = () => { if (b.dataset.run) void select(b.dataset.run); });
@@ -171,7 +172,7 @@ async function select(id: string) {
 function render() {
   if (!current) return;
   $('#empty').hidden = true; $('#workspace').hidden = false;
-  $('#repo').textContent = current.repo + ' / #' + current.number;
+  $('#repo').textContent = current.repo + (current.kind === 'ci' ? ' / CI run #' : ' / #') + current.number;
   $('#title').textContent = current.title;
   $<HTMLAnchorElement>('#issue-link').href = current.url;
   $('#run-status').textContent = (current.mode === 'ai' ? 'AI' : 'Retrieval') + ' · ' + current.status;
@@ -183,7 +184,7 @@ function render() {
   $('#panel-sources').innerHTML = current.evidence.map(e => `<details class="source"><summary><span class="badge">${esc(e.id)} · ${esc(e.kind)}</span> ${esc(e.title)}</summary><pre>${esc(e.text)}</pre><a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">Open source on GitHub</a></details>`).join('') || '<p class="muted">No evidence collected yet.</p>';
   $('#panel-activity').innerHTML = current.events.map(e => `<div class="event"><time>${esc(new Date(e.time).toLocaleTimeString())}</time><div><b>${esc(e.kind)}</b>${esc(e.message)}</div></div>`).join('');
   if (!dirty) $<HTMLTextAreaElement>('#draft').value = current.draft || '';
-  if (current.status === 'failed' && !report) $('#panel-report').innerHTML = `<div class="limitations"><h3>Investigation stopped</h3><p>${esc(current.error || 'The investigation failed.')}</p><p>Collected evidence remains available in the Evidence tab. Submit the issue URL again to retry.</p></div>`;
+  if (current.status === 'failed' && !report) $('#panel-report').innerHTML = `<div class="limitations"><h3>Investigation stopped</h3><p>${esc(current.error || 'The investigation failed.')}</p><p>Collected evidence remains available in the Evidence tab. Submit the URL again to retry.</p></div>`;
   if (current.status === 'failed' && current.evidence.length && (config?.ai || personalConnections.openai_api_key)) {
     const recovery = document.createElement('button');
     recovery.textContent = 'Generate report from saved evidence';
@@ -214,13 +215,20 @@ function poll() {
 $("#start").addEventListener('submit', async event => {
   event.preventDefault(); if (!requireSession() || !canLeave()) return;
   $<HTMLButtonElement>('#investigate').disabled = true; notice('');
-  try { const data = await api<Run>('/runs', {method:'POST',body:JSON.stringify({url:$<HTMLInputElement>('#url').value.trim(),mode:$<HTMLInputElement>('#baseline').checked ? 'retrieval' : 'auto',openai_api_key:personalConnections.openai_api_key || undefined,github_token:personalConnections.github_token || undefined})}); dirty = false; clearTimeout(timer); current = data; location.hash='investigate/'+data.id; tab('report'); render(); await loadHistory(); poll(); }
+  try { const data = await api<Run>('/runs', {method:'POST',body:JSON.stringify({url:$<HTMLInputElement>('#url').value.trim(),kind:$<HTMLInputElement>('input[name="agent"]:checked').value,mode:$<HTMLInputElement>('#baseline').checked ? 'retrieval' : 'auto',openai_api_key:personalConnections.openai_api_key || undefined,github_token:personalConnections.github_token || undefined})}); dirty = false; clearTimeout(timer); current = data; location.hash='investigate/'+data.id; tab('report'); render(); await loadHistory(); poll(); }
   catch(e) { showRequestError(e); } finally { $<HTMLButtonElement>('#investigate').disabled = false; }
 });
 function newRun() {if (!canLeave()) return; dirty=false;current=null;clearTimeout(timer);$('#workspace').hidden=true;$('#empty').hidden=false;$<HTMLInputElement>('#url').value='';location.hash='new';notice('');setTimeout(()=>$<HTMLInputElement>('#url').focus(),0);loadHistory().catch(e=>notice(errorMessage(e)));}
 $('#new').onclick = () => { if (requireSession('#new')) newRun(); };
 $('#empty-new').onclick = () => { if (requireSession('#new')) newRun(); };
 $('#open-investigate').onclick = () => { if (requireSession('#new')) newRun(); };
+document.querySelectorAll<HTMLInputElement>('input[name="agent"]').forEach(input => input.onchange = () => {
+  const ci = input.value === 'ci';
+  $('#url-label').textContent = ci ? 'GitHub Actions run URL' : 'GitHub issue URL';
+  $<HTMLInputElement>('#url').placeholder = ci ? 'https://github.com/owner/repo/actions/runs/123' : 'https://github.com/owner/repo/issues/123';
+  $<HTMLInputElement>('#url').value = '';
+  $('#agent-note').hidden = !ci;
+});
 $('#collapse').onclick=()=>{if(innerWidth<=640){document.body.classList.toggle('nav-open');}else{document.body.classList.toggle('collapsed');}};
 $('#mobile-menu').onclick=()=>document.body.classList.toggle('nav-open');
 $('#workspace-menu').onclick=()=>{location.hash='connections';};
@@ -269,7 +277,7 @@ $('#export').onclick = async event => {
     const response = await fetch(`/api/runs/${current.id}/export`, {headers:{Authorization:`Bearer ${token}`}});
     if (!response.ok) throw new Error('Could not download the report.');
     const url = URL.createObjectURL(await response.blob());
-    const link = document.createElement('a'); link.href = url; link.download = `issue-${current.number}-report.md`; link.click();
+    const link = document.createElement('a'); link.href = url; link.download = `${current.kind === 'ci' ? 'ci' : 'issue'}-${current.number}-report.md`; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (error) { notice(errorMessage(error)); }
 };
