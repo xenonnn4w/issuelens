@@ -342,7 +342,7 @@ function unmountAuth() {
   node.replaceChildren();
 }
 function showAuth() {
-  if (!clerk || activeUserID) return;
+  if (!clerk || activeUserID || !location.pathname.startsWith('/sign-')) return;
   const mode = location.pathname.startsWith('/sign-up') ? 'signup' : 'signin';
   if (mode === authMode) return;
   unmountAuth();
