@@ -350,8 +350,9 @@ function showAuth() {
   const signup = mode === 'signup';
   authMode = mode;
   $('#auth-title').textContent = signup ? 'Create your account' : 'Sign in to Issue Lens';
-  if (signup) clerk.mountSignUp(auth, {routing:'path', path:'/sign-up', signInUrl:'/sign-in', forceRedirectUrl:'/#home'});
-  else clerk.mountSignIn(auth, {routing:'path', path:'/sign-in', signUpUrl:'/sign-up', forceRedirectUrl:'/#home'});
+  const destination = '/' + (sessionStorage.getItem('issue-lens-return') || '#home');
+  if (signup) clerk.mountSignUp(auth, {routing:'path', path:'/sign-up', signInUrl:'/sign-in', forceRedirectUrl:destination});
+  else clerk.mountSignIn(auth, {routing:'path', path:'/sign-in', signUpUrl:'/sign-up', forceRedirectUrl:destination});
 }
 window.addEventListener('hashchange', showAuth);
 void boot();
