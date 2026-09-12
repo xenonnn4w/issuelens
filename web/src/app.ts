@@ -127,15 +127,22 @@ function showRequestError(error: unknown) {
   notice(errorMessage(error));
 }
 function route() {
-  if (!activeUserID) return;
+  if (location.pathname.startsWith('/sign-')) return;
   const name = location.hash.slice(1).split('/')[0] || 'home';
   const view = ['home','new','investigate','usage','connections','docs'].includes(name) ? name : 'home';
+  if (!activeUserID && !['home','docs'].includes(view)) { requireSession(); return; }
   document.querySelectorAll<HTMLElement>('.page-view').forEach(p=>p.hidden=p.id!=='view-'+view);
   document.querySelectorAll<HTMLElement>('[data-view]').forEach(a=>{const active=a.dataset.view===(view==='new'?'investigate':view);a.classList.toggle('active',active);a.setAttribute('aria-current',active?'page':'false');});
   document.body.classList.remove('nav-open');
-  if(view==='usage' || view==='home') refreshUsage().catch(e=>notice(e.message));
+  if(activeUserID && (view==='usage' || view==='home')) refreshUsage().catch(e=>notice(e.message));
   const runId=location.hash.split('/')[1];
   if(view==='investigate' && runId && current?.id!==runId) select(runId);
+}
+function requireSession(destination = location.hash || '#new') {
+  if (activeUserID) return true;
+  sessionStorage.setItem('issue-lens-return', destination);
+  location.assign('/sign-in');
+  return false;
 }
 window.addEventListener('hashchange',route);
 function tab(name: string) {
@@ -205,15 +212,15 @@ function poll() {
   }, 1400);
 }
 $("#start").addEventListener('submit', async event => {
-  event.preventDefault(); if (!canLeave()) return;
+  event.preventDefault(); if (!requireSession() || !canLeave()) return;
   $<HTMLButtonElement>('#investigate').disabled = true; notice('');
   try { const data = await api<Run>('/runs', {method:'POST',body:JSON.stringify({url:$<HTMLInputElement>('#url').value.trim(),mode:$<HTMLInputElement>('#baseline').checked ? 'retrieval' : 'auto',openai_api_key:personalConnections.openai_api_key || undefined,github_token:personalConnections.github_token || undefined})}); dirty = false; clearTimeout(timer); current = data; location.hash='investigate/'+data.id; tab('report'); render(); await loadHistory(); poll(); }
   catch(e) { showRequestError(e); } finally { $<HTMLButtonElement>('#investigate').disabled = false; }
 });
 function newRun() {if (!canLeave()) return; dirty=false;current=null;clearTimeout(timer);$('#workspace').hidden=true;$('#empty').hidden=false;$<HTMLInputElement>('#url').value='';location.hash='new';notice('');setTimeout(()=>$<HTMLInputElement>('#url').focus(),0);loadHistory().catch(e=>notice(errorMessage(e)));}
-$('#new').onclick = newRun;
-$('#empty-new').onclick=newRun;
-$('#open-investigate').onclick=newRun;
+$('#new').onclick = () => { if (requireSession('#new')) newRun(); };
+$('#empty-new').onclick = () => { if (requireSession('#new')) newRun(); };
+$('#open-investigate').onclick = () => { if (requireSession('#new')) newRun(); };
 $('#collapse').onclick=()=>{if(innerWidth<=640){document.body.classList.toggle('nav-open');}else{document.body.classList.toggle('collapsed');}};
 $('#mobile-menu').onclick=()=>document.body.classList.toggle('nav-open');
 $('#workspace-menu').onclick=()=>{location.hash='connections';};
@@ -277,6 +284,7 @@ async function refreshUsage() {
 $('#refresh-usage').onclick=()=>refreshUsage().catch(e=>notice(errorMessage(e)));
 async function boot() {
   icons();
+  document.body.classList.toggle('auth-required', location.pathname.startsWith('/sign-'));
   try {
     config = await api<Config>('/config');
     if (!config.clerk_publishable_key) throw new Error('Clerk is not configured on this server.');
@@ -297,20 +305,30 @@ async function syncSession() {
   clearTimeout(timer);
   current = null; runs = []; dirty = false; personalConnections = {openai_api_key:'', github_token:''};
   activeUserID = id;
-  document.body.classList.toggle('auth-required', !id);
+  const authPage = location.pathname.startsWith('/sign-');
+  document.body.classList.toggle('auth-required', !id && authPage);
   if (id) {
     unmountAuth();
     $('#auth-screen').hidden = true;
     clerk.mountUserButton($<HTMLDivElement>('#user-button'));
-    if (location.pathname.startsWith('/sign-')) history.replaceState(null, '', '/#home');
+    if (authPage) {
+      const destination = sessionStorage.getItem('issue-lens-return') || '#home';
+      sessionStorage.removeItem('issue-lens-return');
+      history.replaceState(null, '', '/' + destination);
+    }
     loadConnections(); updateConnections(); route();
     try { await loadHistory(); await refreshUsage(); } catch (error) { notice(errorMessage(error)); }
   } else {
-    if (!location.pathname.startsWith('/sign-')) history.replaceState(null, '', '/sign-in');
-    $('#auth-screen').hidden = false;
+    $('#auth-screen').hidden = !authPage;
     clerk.unmountUserButton($<HTMLDivElement>('#user-button'));
     $<HTMLDivElement>('#user-button').replaceChildren();
-    showAuth();
+    $('#recent').innerHTML = '<div class="recent-empty"><h3>Start your first investigation.</h3><p>Sign in when you are ready to investigate a GitHub issue.</p></div>';
+    $('#repository-activity').textContent = 'Your repository activity appears here after sign-in.';
+    $('#activity-total').textContent = '';
+    $('#history').replaceChildren();
+    $('#count').textContent = $('#history-count').textContent = '0';
+    $('#usage-preview').textContent = 'Sign in to view your usage.';
+    if (authPage) showAuth(); else route();
   }
   syncing = false;
   if (syncPending) { syncPending = false; void syncSession(); }
