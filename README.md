@@ -12,9 +12,9 @@ make test check
 make run
 ```
 
-Open http://127.0.0.1:8765. `LISTEN_ADDR`, `ISSUE_LENS_DB`, and `WEB_ROOT` are optional environment settings. Set `OPENAI_API_KEY` to enable the AI investigator and `GITHUB_TOKEN` to raise GitHub API limits. The default model is `gpt-4.1-mini`; `OPENAI_MODEL` and `OPENAI_BASE_URL` configure the server-side provider. Without an OpenAI key the application explicitly uses retrieval-only mode.
+Open http://127.0.0.1:8765. `LISTEN_ADDR`, `ISSUE_LENS_DB`, and `WEB_ROOT` are optional environment settings. Set `CLERK_PUBLISHABLE_KEY` and `CLERK_ISSUER` for a Clerk development instance to sign in locally; the issuer is its Frontend API URL. Set `OPENAI_API_KEY` to enable the AI investigator and `GITHUB_TOKEN` to raise GitHub API limits. The default model is `gpt-4.1-mini`; `OPENAI_MODEL` and `OPENAI_BASE_URL` configure the server-side provider. Without an OpenAI key the application explicitly uses retrieval-only mode.
 
-Visitors can also add their own OpenAI and GitHub keys in **Connections**. These remain in the browser tab's session storage, are sent with start/recovery requests, and are used only by that in-memory job. Personal OpenAI keys always go to the official OpenAI endpoint. Keys are not stored in SQLite, returned by the API, or included in public reports. Issue descriptions and retrieved code are sent to the configured model provider in AI mode. Use a GitHub token with read-only access to public repositories.
+Signed-in users can also add their own OpenAI and GitHub keys in **Connections**. These remain in account-scoped browser-tab session storage, are sent with start/recovery requests, and are used only by that in-memory job. Personal OpenAI keys always go to the official OpenAI endpoint. Keys are not stored in SQLite, returned by the API, or included in reports. Issue descriptions and retrieved code are sent to the configured model provider in AI mode. Use a GitHub token with read-only access to public repositories.
 
 ## Investigation
 
@@ -28,9 +28,9 @@ Two investigations run concurrently and at most six may be active or queued. Eac
 
 ## Deployment
 
-`infra/docker-compose.yml` builds the Go API, mounts the static console and a persistent SQLite volume, and places Caddy in front of the API. Production requires `GATEWAY_TOKEN`; the API port is not published. Caddy injects that token and serves the site publicly, but only the maintainer can edit or approve response drafts using HTTP Basic authentication. The application checks hosts and write origins. Static assets are served with `Cache-Control: no-store` so Cloudflare does not mix releases.
+`infra/docker-compose.yml` builds the Go API, mounts the static console and a persistent SQLite volume, and places Caddy in front of the API. Production requires `GATEWAY_TOKEN`; the API port is not published. Caddy injects that token. All investigation and usage endpoints require a Clerk session, verified against the production JWKS and issuer, and every run is scoped to its creator. A signed-in user can edit and approve only their own drafts. The application checks hosts and write origins. Static assets are served with `Cache-Control: no-store` so Cloudflare does not mix releases.
 
-Prepare `/opt/issue-lens/infra/.env` from `infra/.env.example` on the EC2 host. Keep it out of Git. Deploy manually with:
+Prepare `/opt/issue-lens/infra/.env` from `infra/.env.example` on the EC2 host. Set `CLERK_PUBLISHABLE_KEY` and `CLERK_ISSUER=https://clerk.issuelens.me` for the production instance. The Go API verifies tokens with Clerk's public JWKS and does not need an admin secret key. Keep `.env` out of Git. Deploy manually with:
 
 ```bash
 bash infra/deploy.sh issuelens-ec2
@@ -44,5 +44,5 @@ The GitHub Actions workflow typechecks and builds the web package, runs Go tests
 - Content search covers a bounded group of candidate files, not an exhaustive semantic index or call graph.
 - Current default-branch code may differ from the reporter's version. The agent does not reproduce bugs or run tests.
 - Citation validation proves a source was observed, not that a claim follows from it. A maintainer must review the report.
-- Reports and usage are public on the deployed site. Response approval is local metadata, not a verified GitHub identity.
+- Reports and usage are private to the signed-in Clerk account that created them. Response approval is local metadata, not a verified GitHub identity.
 - Historical benchmark scores are not claimed. An issue-time evaluation must exclude future resolutions and compare identical held-out cases.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -15,13 +16,20 @@ func testServer(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	return newServer(store, "../web/out")
+	s := newServer(store, "../web/out")
+	s.authOverride = func(r *http.Request) string {
+		if id := r.Header.Get("X-Test-User"); id != "" {
+			return id
+		}
+		return "user-a"
+	}
+	return s
 }
 
 func TestHomeAndAPI(t *testing.T) {
 	s := testServer(t)
 	h := s.handler()
-	for _, p := range []string{"/", "/favicon.svg", "/static/app.js", "/static/new.css", "/static/notice.css", "/static/mobile.css", "/api/config", "/api/usage", "/api/runs", "/healthz"} {
+	for _, p := range []string{"/", "/privacy", "/favicon.svg", "/static/app.js", "/static/new.css", "/static/notice.css", "/static/mobile.css", "/api/config", "/api/usage", "/api/runs", "/healthz"} {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest("GET", p, nil))
 		if w.Code != 200 {
@@ -29,6 +37,7 @@ func TestHomeAndAPI(t *testing.T) {
 		}
 	}
 	r := newRun("test", "acme/widget", 12, "retrieval")
+	r.OwnerID = "user-a"
 	r.Status = "ready"
 	r.Report = &Report{Summary: "summary", Draft: "draft"}
 	r.Draft = "draft"
@@ -56,6 +65,60 @@ func TestHomeAndAPI(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/runs/test/export", nil))
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "approved") {
 		t.Fatalf("export: %s", w.Body.String())
+	}
+}
+
+func TestRunEndpointsArePrivateToOwner(t *testing.T) {
+	s := testServer(t)
+	s.authOverride = func(r *http.Request) string { return r.Header.Get("X-Test-User") }
+	s.launch = func(func()) {}
+	h := s.handler()
+	request := func(method, path, user, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		if user != "" {
+			r.Header.Set("X-Test-User", user)
+		}
+		h.ServeHTTP(w, r)
+		return w
+	}
+	if w := request("GET", "/api/runs", "", ""); w.Code != 401 {
+		t.Fatalf("unsigned list: %d", w.Code)
+	}
+	if w := request("GET", "/api/usage", "", ""); w.Code != 401 {
+		t.Fatalf("unsigned usage: %d", w.Code)
+	}
+	w := request("POST", "/api/runs", "user-a", `{"url":"https://github.com/acme/widget/issues/12","mode":"retrieval"}`)
+	if w.Code != 202 {
+		t.Fatal(w.Body.String())
+	}
+	var run Run
+	if err := json.Unmarshal(w.Body.Bytes(), &run); err != nil {
+		t.Fatal(err)
+	}
+	if run.OwnerID != "user-a" {
+		t.Fatalf("owner not saved: %q", run.OwnerID)
+	}
+	for _, path := range []string{"/api/runs/" + run.ID, "/api/runs/" + run.ID + "/export"} {
+		if w := request("GET", path, "user-b", ""); w.Code != 404 {
+			t.Fatalf("foreign %s: %d", path, w.Code)
+		}
+	}
+	if w := request("PATCH", "/api/runs/"+run.ID+"/review", "user-b", `{"draft":"changed","approved":true}`); w.Code != 404 {
+		t.Fatalf("foreign review: %d", w.Code)
+	}
+	if w := request("POST", "/api/runs/"+run.ID+"/recover", "user-b", `{}`); w.Code != 404 {
+		t.Fatalf("foreign recovery: %d", w.Code)
+	}
+	if w := request("GET", "/api/runs", "user-b", ""); w.Code != 200 || strings.Contains(w.Body.String(), run.ID) {
+		t.Fatalf("foreign list: %d %s", w.Code, w.Body.String())
+	}
+	if w := request("GET", "/api/usage", "user-b", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"total":0`) {
+		t.Fatalf("foreign usage: %d %s", w.Code, w.Body.String())
+	}
+	if w := request("GET", "/api/runs/"+run.ID, "user-a", ""); w.Code != 200 {
+		t.Fatalf("owner detail: %d", w.Code)
 	}
 }
 

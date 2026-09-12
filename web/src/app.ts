@@ -5,6 +5,8 @@ import {
   Menu, PanelLeftClose, Plus, RefreshCw, Save, ScanSearch, ShieldCheck,
   Sparkles, Trash2, X,
 } from 'lucide';
+import { Clerk } from '@clerk/clerk-js';
+import { ClerkUI } from '@clerk/ui/entry';
 
 const iconSet = {
   ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, ChartNoAxesCombined,
@@ -23,7 +25,7 @@ type Run = {
   events: RunEvent[]; evidence: Evidence[]; report: InvestigationReport | null; draft: string;
   approved: boolean; commit?: string; error?: string; recovered_from?: string;
 };
-type Config = { ai: boolean; github: boolean; model: string; deployment: 'local' | 'server'; review_user: string; shared_key_next_at: string };
+type Config = { ai: boolean; github: boolean; model: string; deployment: 'local' | 'server'; clerk_publishable_key: string; shared_key_next_at: string };
 type Usage = { total: number; ready: number; approved: number; failed: number; github_requests: number; tool_calls: number; input_tokens: number; output_tokens: number };
 type Connections = { openai_api_key: string; github_token: string };
 class ApiError extends Error {
@@ -37,13 +39,14 @@ function $<T extends HTMLElement = HTMLElement>(selector: string): T {
 }
 const esc = (value: unknown): string => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c] ?? c));
 const errorMessage = (error: unknown): string => error instanceof Error ? error.message : 'Unexpected error';
-let current: Run | null = null, timer: number | undefined, dirty = false, runs: Run[] = [], config: Config | null = null, toastTimer: number | undefined, reviewAuth: string | null = null;
-const connectionStorage = 'issue-lens-connections';
+let current: Run | null = null, timer: number | undefined, dirty = false, runs: Run[] = [], config: Config | null = null, toastTimer: number | undefined;
+let clerk: Clerk | null = null, activeUserID = '', authMode = '', syncPending = false, sessionReady = false;
+const connectionStorage = () => `issue-lens-connections:${activeUserID}`;
 let personalConnections: Connections = {openai_api_key: '', github_token: ''};
 function icons() { createIcons({ icons: iconSet }); }
 function loadConnections() {
   try {
-    const saved = JSON.parse(sessionStorage.getItem(connectionStorage) || '{}');
+    const saved = JSON.parse(sessionStorage.getItem(connectionStorage()) || '{}');
     personalConnections = {openai_api_key: saved.openai_api_key || '', github_token: saved.github_token || ''};
   } catch { personalConnections = {openai_api_key: '', github_token: ''}; }
   $<HTMLInputElement>('#openai-key').value = personalConnections.openai_api_key;
@@ -65,9 +68,11 @@ function updateConnections() {
   $('#provider-status').innerHTML = `<div class="provider"><div><h2>GitHub</h2><p>Public issues, discussion, and commit-pinned repository code.</p></div><span class="badge">${personalGitHub ? 'Your token' : config.github ? 'Server token' : 'Unauthenticated access'}</span></div><div class="provider"><div><h2>AI provider</h2><p>${esc(config.model)} · ${esc(personalAI ? 'Your key has no shared-key limit' : config.ai ? sharedNote : 'Add your key for AI investigations')}</p></div><span class="badge">${personalAI ? 'Your key' : config.ai ? 'Shared key' : 'Key required'}</span></div><div class="provider"><div><h2>Workspace storage</h2><p>SQLite · Investigation history and reviewed responses</p></div><span class="badge">Available</span></div>`;
 }
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch('/api' + path, {...options, headers: {'Content-Type':'application/json', ...options.headers}});
+  const token = path === '/config' ? null : await clerk?.session?.getToken();
+  if (path !== '/config' && !token) throw new ApiError('Sign in to continue.', 401);
+  const response = await fetch('/api' + path, {...options, headers: {'Content-Type':'application/json', ...(token ? {Authorization:`Bearer ${token}`} : {}), ...options.headers}});
   const data: { detail?: unknown; code?: unknown; retry_at?: unknown } = response.headers.get('content-type')?.includes('application/json') ? await response.json() : {};
-  if (response.status === 401) throw new ApiError('Maintainer password required or incorrect.', 401);
+  if (response.status === 401) throw new ApiError('Your session expired. Sign in again.', 401);
   if (!response.ok) throw new ApiError(
     typeof data.detail === 'string' ? data.detail : 'The request could not be completed. Please try again.',
     response.status,
@@ -122,6 +127,7 @@ function showRequestError(error: unknown) {
   notice(errorMessage(error));
 }
 function route() {
+  if (!activeUserID) return;
   const name = location.hash.slice(1).split('/')[0] || 'home';
   const view = ['home','new','investigate','usage','connections','docs'].includes(name) ? name : 'home';
   document.querySelectorAll<HTMLElement>('.page-view').forEach(p=>p.hidden=p.id!=='view-'+view);
@@ -187,7 +193,7 @@ function render() {
   $<HTMLButtonElement>('#copy').disabled = !current.approved || dirty;
   $('#approval').textContent = current.approved && !dirty ? 'Approved locally' : 'Unreviewed';
   $('#snapshot').textContent = current.commit ? 'SNAPSHOT ' + current.commit.slice(0,12) : current.recovered_from ? 'Recovered from saved evidence · Original source links preserved' : 'Evidence is saved locally';
-  $('#export').hidden = !report; $<HTMLAnchorElement>('#export').href = '/api/runs/' + current.id + '/export';
+  $('#export').hidden = !report;
   icons();
 }
 function poll() {
@@ -215,14 +221,14 @@ $("#connection-form").addEventListener('submit', event => {
   event.preventDefault();
   personalConnections = {openai_api_key: $<HTMLInputElement>('#openai-key').value.trim(), github_token: $<HTMLInputElement>('#github-token').value.trim()};
   try {
-    if (personalConnections.openai_api_key || personalConnections.github_token) sessionStorage.setItem(connectionStorage, JSON.stringify(personalConnections));
-    else sessionStorage.removeItem(connectionStorage);
+    if (personalConnections.openai_api_key || personalConnections.github_token) sessionStorage.setItem(connectionStorage(), JSON.stringify(personalConnections));
+    else sessionStorage.removeItem(connectionStorage());
   } catch { notice('Browser storage is unavailable. Keys will work until this page reloads.'); updateConnections(); return; }
   updateConnections();
   notice('Connections saved for this browser tab.');
 });
 $('#clear-connections').onclick = () => {
-  try { sessionStorage.removeItem(connectionStorage); } catch {}
+  try { sessionStorage.removeItem(connectionStorage()); } catch {}
   personalConnections = {openai_api_key: '', github_token: ''};
   $<HTMLInputElement>('#openai-key').value = $<HTMLInputElement>('#github-token').value = '';
   updateConnections();
@@ -239,18 +245,26 @@ document.querySelectorAll<HTMLElement>('[data-toggle-secret]').forEach(button =>
 $('#draft').oninput = () => {dirty=true;$<HTMLButtonElement>('#copy').disabled=true;$('#approval').textContent='Unsaved edits';};
 async function save(approved: boolean) {
   if (!current) return;
-  if (config?.deployment === 'server' && !reviewAuth) {
-    const password = prompt('Maintainer password to edit or approve this response');
-    if (password === null) return;
-    reviewAuth = 'Basic ' + btoa((config.review_user || 'maintainer') + ':' + password);
-  }
   $<HTMLButtonElement>('#save').disabled = $<HTMLButtonElement>('#approve').disabled = true;
-  try { current = await api<Run>('/runs/' + current.id + '/review',{method:'PATCH',headers:reviewAuth ? {Authorization:reviewAuth} : {},body:JSON.stringify({draft:$<HTMLTextAreaElement>('#draft').value,approved})}); dirty=false;render();await loadHistory();await refreshUsage();notice(approved ? 'Response approved locally. You can now copy it for GitHub.' : 'Draft saved.'); }
-  catch(e) {if (errorMessage(e).includes('password')) reviewAuth = null; notice(errorMessage(e));} finally {$<HTMLButtonElement>('#save').disabled = $<HTMLButtonElement>('#approve').disabled = !current?.report;}
+  try { current = await api<Run>('/runs/' + current.id + '/review',{method:'PATCH',body:JSON.stringify({draft:$<HTMLTextAreaElement>('#draft').value,approved})}); dirty=false;render();await loadHistory();await refreshUsage();notice(approved ? 'Response approved. You can now copy it for GitHub.' : 'Draft saved.'); }
+  catch(e) {notice(errorMessage(e));} finally {$<HTMLButtonElement>('#save').disabled = $<HTMLButtonElement>('#approve').disabled = !current?.report;}
 }
 $('#save').onclick = () => save(false); $('#approve').onclick = () => save(true);
 $('#copy').onclick = async () => {
   try { if (!current) return; await navigator.clipboard.writeText(current.draft); notice('Approved response copied.'); } catch {notice('Clipboard unavailable. Select the response text to copy it manually.');}
+};
+$('#export').onclick = async event => {
+  event.preventDefault();
+  if (!current) return;
+  try {
+    const token = await clerk?.session?.getToken();
+    if (!token) throw new Error('Sign in to download the report.');
+    const response = await fetch(`/api/runs/${current.id}/export`, {headers:{Authorization:`Bearer ${token}`}});
+    if (!response.ok) throw new Error('Could not download the report.');
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a'); link.href = url; link.download = `issue-${current.number}-report.md`; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) { notice(errorMessage(error)); }
 };
 window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='';}});
 async function refreshUsage() {
@@ -262,9 +276,63 @@ async function refreshUsage() {
 }
 $('#refresh-usage').onclick=()=>refreshUsage().catch(e=>notice(errorMessage(e)));
 async function boot() {
-  icons(); loadConnections(); route();
-  try {const loaded = await api<Config>('/config'); config=loaded;$('#workspace-type').textContent=loaded.deployment==='local'?'Local workspace':'Public workspace';updateConnections();await loadHistory();await refreshUsage();}
-  catch(e){notice(errorMessage(e));$('#connection').textContent='Disconnected';}
-  if (current) render();
+  icons();
+  try {
+    config = await api<Config>('/config');
+    if (!config.clerk_publishable_key) throw new Error('Clerk is not configured on this server.');
+    clerk = new Clerk(config.clerk_publishable_key);
+    await clerk.load({ui:{ClerkUI}, signInUrl:'/sign-in', signUpUrl:'/sign-up'});
+    clerk.addListener(() => { void syncSession(); });
+    await syncSession();
+  } catch (error) { $('#auth-error').textContent = errorMessage(error); }
 }
-boot();
+let syncing = false;
+async function syncSession() {
+  if (!clerk) return;
+  if (syncing) { syncPending = true; return; }
+  const id = clerk.user?.id || '';
+  if (id === activeUserID && sessionReady) return;
+  syncing = true;
+  sessionReady = true;
+  clearTimeout(timer);
+  current = null; runs = []; dirty = false; personalConnections = {openai_api_key:'', github_token:''};
+  activeUserID = id;
+  document.body.classList.toggle('auth-required', !id);
+  if (id) {
+    unmountAuth();
+    $('#auth-screen').hidden = true;
+    clerk.mountUserButton($<HTMLDivElement>('#user-button'));
+    if (location.pathname.startsWith('/sign-')) history.replaceState(null, '', '/#home');
+    loadConnections(); updateConnections(); route();
+    try { await loadHistory(); await refreshUsage(); } catch (error) { notice(errorMessage(error)); }
+  } else {
+    $('#auth-screen').hidden = false;
+    clerk.unmountUserButton($<HTMLDivElement>('#user-button'));
+    $<HTMLDivElement>('#user-button').replaceChildren();
+    showAuth();
+  }
+  syncing = false;
+  if (syncPending) { syncPending = false; void syncSession(); }
+}
+function unmountAuth() {
+  if (!clerk) return;
+  const node = $<HTMLDivElement>('#auth-component');
+  if (authMode === 'signup') clerk.unmountSignUp(node);
+  if (authMode === 'signin') clerk.unmountSignIn(node);
+  authMode = '';
+  node.replaceChildren();
+}
+function showAuth() {
+  if (!clerk || activeUserID) return;
+  const mode = location.pathname.startsWith('/sign-up') ? 'signup' : 'signin';
+  if (mode === authMode) return;
+  unmountAuth();
+  const auth = $<HTMLDivElement>('#auth-component');
+  const signup = mode === 'signup';
+  authMode = mode;
+  $('#auth-title').textContent = signup ? 'Create your account' : 'Sign in to Issue Lens';
+  if (signup) clerk.mountSignUp(auth, {routing:'path', path:'/sign-up', signInUrl:'/sign-in', forceRedirectUrl:'/#home'});
+  else clerk.mountSignIn(auth, {routing:'path', path:'/sign-in', signUpUrl:'/sign-up', forceRedirectUrl:'/#home'});
+}
+window.addEventListener('hashchange', showAuth);
+void boot();

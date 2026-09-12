@@ -18,6 +18,8 @@ import (
 	"time"
 )
 
+type userContextKey struct{}
+
 type Server struct {
 	Store         *Store
 	WebRoot       string
@@ -30,6 +32,10 @@ type Server struct {
 	GitHubToken   string
 	DailyLimit    int
 	reviewUser    string
+	clerkPublic   string
+	clerkIssuer   string
+	verifier      *sessionVerifier
+	authOverride  func(*http.Request) string
 	mu            sync.Mutex
 	queued        int
 	slots         chan struct{}
@@ -41,7 +47,8 @@ func newServer(store *Store, webRoot string) *Server {
 	if limit < 1 {
 		limit = 10
 	}
-	return &Server{Store: store, WebRoot: webRoot, Deployed: os.Getenv("DEPLOYED") == "1", Gateway: os.Getenv("GATEWAY_TOKEN"), AllowedHost: os.Getenv("ALLOWED_HOSTS"), OpenAIKey: os.Getenv("OPENAI_API_KEY"), OpenAIModel: env("OPENAI_MODEL", "gpt-4.1-mini"), OpenAIBaseURL: env("OPENAI_BASE_URL", "https://api.openai.com/v1"), GitHubToken: os.Getenv("GITHUB_TOKEN"), DailyLimit: limit, reviewUser: env("WORKSPACE_USER", "maintainer"), slots: make(chan struct{}, 2)}
+	issuer := strings.TrimSuffix(os.Getenv("CLERK_ISSUER"), "/")
+	return &Server{Store: store, WebRoot: webRoot, Deployed: os.Getenv("DEPLOYED") == "1", Gateway: os.Getenv("GATEWAY_TOKEN"), AllowedHost: os.Getenv("ALLOWED_HOSTS"), OpenAIKey: os.Getenv("OPENAI_API_KEY"), OpenAIModel: env("OPENAI_MODEL", "gpt-4.1-mini"), OpenAIBaseURL: env("OPENAI_BASE_URL", "https://api.openai.com/v1"), GitHubToken: os.Getenv("GITHUB_TOKEN"), DailyLimit: limit, reviewUser: env("WORKSPACE_USER", "maintainer"), clerkIssuer: issuer, clerkPublic: os.Getenv("CLERK_PUBLISHABLE_KEY"), verifier: newSessionVerifier(issuer), slots: make(chan struct{}, 2)}
 }
 func env(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
@@ -64,9 +71,13 @@ func (s *Server) handler() http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		http.ServeFile(w, r, filepath.Join(s.WebRoot, "favicon.svg"))
 	})
+	mux.HandleFunc("GET /privacy", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		http.ServeFile(w, r, filepath.Join(s.WebRoot, "privacy.html"))
+	})
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(filepath.Join(s.WebRoot, "static")))))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
+		if r.URL.Path != "/" && r.URL.Path != "/sign-in" && !strings.HasPrefix(r.URL.Path, "/sign-in/") && r.URL.Path != "/sign-up" && !strings.HasPrefix(r.URL.Path, "/sign-up/") {
 			http.NotFound(w, r)
 			return
 		}
@@ -94,9 +105,39 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data: https://img.clerk.com https://*.clerk.accounts.dev; style-src 'self' 'unsafe-inline'; script-src 'self' https://clerk.issuelens.me https://*.clerk.accounts.dev https://challenges.cloudflare.com; connect-src 'self' https://clerk.issuelens.me https://accounts.issuelens.me https://*.clerk.accounts.dev https://*.clerk.com; frame-src https://accounts.issuelens.me https://*.clerk.accounts.dev https://challenges.cloudflare.com; worker-src 'self' blob:; frame-ancestors 'none'")
+		if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/config" {
+			if s.authOverride != nil {
+				if id := s.authOverride(r); id != "" {
+					next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey{}, id)))
+					return
+				}
+				apiError(w, 401, "Sign in to continue")
+				return
+			}
+			if s.clerkIssuer == "" {
+				apiError(w, 503, "Authentication is not configured")
+				return
+			}
+			scheme := "https://"
+			if !s.Deployed && r.TLS == nil {
+				scheme = "http://"
+			}
+			id, err := s.verifier.verify(r.Context(), r.Header.Get("Authorization"), scheme+r.Host)
+			if err != nil {
+				apiError(w, 401, "Sign in to continue")
+				return
+			}
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey{}, id)))
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func userID(r *http.Request) string {
+	id, _ := r.Context().Value(userContextKey{}).(string)
+	return id
 }
 
 func jsonResponse(w http.ResponseWriter, status int, value any) {
@@ -142,10 +183,10 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 	if next.After(time.Now()) {
 		nextAt = next.Format(time.RFC3339)
 	}
-	jsonResponse(w, 200, map[string]any{"ai": s.OpenAIKey != "", "github": s.GitHubToken != "", "model": s.OpenAIModel, "deployment": deployment, "review_user": s.reviewUser, "shared_key_next_at": nextAt, "limits": map[string]int{"active": 2, "queued": 6, "daily_public_runs": s.DailyLimit, "shared_key_interval_seconds": 3600, "github_requests": 36, "model_turns": 10, "tool_calls": 18, "timeout_seconds": 360}})
+	jsonResponse(w, 200, map[string]any{"ai": s.OpenAIKey != "", "github": s.GitHubToken != "", "model": s.OpenAIModel, "deployment": deployment, "clerk_publishable_key": s.clerkPublic, "shared_key_next_at": nextAt, "limits": map[string]int{"active": 2, "queued": 6, "daily_public_runs": s.DailyLimit, "shared_key_interval_seconds": 3600, "github_requests": 36, "model_turns": 10, "tool_calls": 18, "timeout_seconds": 360}})
 }
 func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
-	runs, err := s.Store.List(1000000)
+	runs, err := s.Store.ListForOwner(userID(r), 1000000)
 	if err != nil {
 		apiError(w, 500, "Could not read usage")
 		return
@@ -176,7 +217,7 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, 200, stats)
 }
 func (s *Server) list(w http.ResponseWriter, r *http.Request) {
-	runs, err := s.Store.List(100)
+	runs, err := s.Store.ListForOwner(userID(r), 100)
 	if err != nil {
 		apiError(w, 500, "Could not read investigations")
 		return
@@ -188,7 +229,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, 200, items)
 }
 func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
-	run, err := s.Store.Get(r.PathValue("id"))
+	run, err := s.Store.GetForOwner(r.PathValue("id"), userID(r))
 	if err == sql.ErrNoRows {
 		apiError(w, 404, "Investigation not found")
 		return
@@ -273,6 +314,7 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run := newRun(newID(), repo, number, mode)
+	run.OwnerID = userID(r)
 	if !s.createQueuedRun(w, run, mode == "ai" && input.OpenAIKey == "") {
 		return
 	}
@@ -341,7 +383,7 @@ func (s *Server) runJob(id, mode, openaiKey, githubToken string) {
 }
 
 func (s *Server) recover(w http.ResponseWriter, r *http.Request) {
-	original, err := s.Store.Get(r.PathValue("id"))
+	original, err := s.Store.GetForOwner(r.PathValue("id"), userID(r))
 	if err == sql.ErrNoRows {
 		apiError(w, 404, "Investigation not found")
 		return
@@ -435,7 +477,7 @@ func (s *Server) runRecovery(id, key string) {
 }
 
 func (s *Server) review(w http.ResponseWriter, r *http.Request) {
-	run, err := s.Store.Get(r.PathValue("id"))
+	run, err := s.Store.GetForOwner(r.PathValue("id"), userID(r))
 	if err == sql.ErrNoRows {
 		apiError(w, 404, "Investigation not found")
 		return
@@ -467,7 +509,7 @@ func (s *Server) review(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) export(w http.ResponseWriter, r *http.Request) {
-	run, err := s.Store.Get(r.PathValue("id"))
+	run, err := s.Store.GetForOwner(r.PathValue("id"), userID(r))
 	if err == sql.ErrNoRows {
 		apiError(w, 404, "Investigation not found")
 		return

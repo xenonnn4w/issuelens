@@ -10,6 +10,8 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@clerk/clerk-js": "^6.39.0",
+    "@clerk/ui": "^1.40.0",
     "lucide": "1.55.0"
   }
 }

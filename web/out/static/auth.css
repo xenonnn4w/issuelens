@@ -1,0 +1,17 @@
+body.auth-required > .sidebar,
+body.auth-required > main { display: none; }
+body:not(.auth-required) > #auth-screen { display: none; }
+#auth-screen { min-height: 100vh; background: #f8f9f7; color: #171b19; }
+.auth-header { height: 70px; display: flex; align-items: center; gap: 11px; padding: 0 clamp(20px, 5vw, 72px); border-bottom: 1px solid #dfe4df; font-size: 13px; letter-spacing: 0; }
+.auth-mark { display: inline-flex; width: 29px; height: 29px; align-items: center; justify-content: center; background: #16211c; color: white; border-radius: 4px; }
+.auth-mark svg { width: 18px; height: 18px; }
+.auth-main { max-width: 430px; margin: clamp(36px, 7vh, 80px) auto 0; padding: 0 18px 40px; }
+.auth-main h1 { margin: 10px 0 8px; font-size: 30px; line-height: 1.15; }
+.auth-main > p { color: #5d6860; line-height: 1.45; }
+#auth-component { min-height: 320px; margin-top: 26px; }
+#auth-error { color: #b82d39; }
+.auth-privacy { color: #386149; font-size: 13px; }
+.account-row { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.account-row .user-row { flex: 1; min-width: 0; }
+#user-button { flex: none; min-width: 28px; }
+@media (max-width: 480px) { .auth-main h1 { font-size: 25px; } }

@@ -6,10 +6,6 @@
   encode gzip zstd
   @static path /static/* /favicon.svg
   header @static Cache-Control "no-store"
-  @review path /api/runs/*/review
-  basic_auth @review {
-    {$WORKSPACE_USER} {$WORKSPACE_PASSWORD_HASH}
-  }
   reverse_proxy api:8080 {
     header_up X-Workspace-Gateway {$GATEWAY_TOKEN}
   }

@@ -109,6 +109,39 @@ func (s *Store) Get(id string) (*Run, error) {
 	return &run, nil
 }
 
+func (s *Store) GetForOwner(id, ownerID string) (*Run, error) {
+	var payload []byte
+	if err := s.db.QueryRow("SELECT payload FROM runs WHERE id=? AND json_extract(payload,'$.owner_id')=?", id, ownerID).Scan(&payload); err != nil {
+		return nil, err
+	}
+	var run Run
+	if err := json.Unmarshal(payload, &run); err != nil {
+		return nil, err
+	}
+	return &run, nil
+}
+
+func (s *Store) ListForOwner(ownerID string, limit int) ([]*Run, error) {
+	rows, err := s.db.Query("SELECT payload FROM runs WHERE json_extract(payload,'$.owner_id')=? ORDER BY created DESC LIMIT ?", ownerID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	runs := []*Run{}
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			return nil, err
+		}
+		var run Run
+		if err := json.Unmarshal(payload, &run); err != nil {
+			return nil, err
+		}
+		runs = append(runs, &run)
+	}
+	return runs, rows.Err()
+}
+
 func (s *Store) List(limit int) ([]*Run, error) {
 	rows, err := s.db.Query("SELECT payload FROM runs ORDER BY created DESC LIMIT ?", limit)
 	if err != nil {
