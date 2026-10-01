@@ -1,6 +1,8 @@
 import {build} from 'esbuild';
 import {readFile, writeFile} from 'node:fs/promises';
 
+await build({entryPoints:['src/architecture-theme.ts'], bundle:true, format:'iife', target:'es2022', minify:true, outfile:'out/static/architecture-theme.js'});
+
 const result = await build({
   entryPoints:['src/app.ts'], bundle:true, splitting:true, format:'esm',
   target:'es2022', minify:true, outdir:'out/static/build',
