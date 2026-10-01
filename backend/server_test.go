@@ -73,6 +73,24 @@ func TestHomeAndAPI(t *testing.T) {
 	}
 }
 
+func TestArchitectureIsPublic(t *testing.T) {
+	s := testServer(t)
+	s.authOverride = nil
+	s.clerkIssuer = ""
+	h := s.handler()
+	for _, item := range []struct{ path, contentType, content string }{
+		{"/architecture", "text/html", "How an investigation runs"},
+		{"/static/architecture.svg", "image/svg+xml", "<svg"},
+		{"/static/architecture.css", "text/css", "@media"},
+	} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", item.path, nil))
+		if w.Code != http.StatusOK || !strings.HasPrefix(w.Header().Get("Content-Type"), item.contentType) || !strings.Contains(w.Body.String(), item.content) {
+			t.Fatalf("%s: status=%d type=%s", item.path, w.Code, w.Header().Get("Content-Type"))
+		}
+	}
+}
+
 func TestRunEndpointsArePrivateToOwner(t *testing.T) {
 	s := testServer(t)
 	s.authOverride = func(r *http.Request) string { return r.Header.Get("X-Test-User") }

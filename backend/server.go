@@ -75,6 +75,10 @@ func (s *Server) handler() http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		http.ServeFile(w, r, filepath.Join(s.WebRoot, "privacy.html"))
 	})
+	mux.HandleFunc("GET /architecture", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		http.ServeFile(w, r, filepath.Join(s.WebRoot, "architecture.html"))
+	})
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(filepath.Join(s.WebRoot, "static")))))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" && r.URL.Path != "/sign-in" && !strings.HasPrefix(r.URL.Path, "/sign-in/") && r.URL.Path != "/sign-up" && !strings.HasPrefix(r.URL.Path, "/sign-up/") {
