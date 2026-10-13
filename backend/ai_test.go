@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -38,5 +39,17 @@ func TestAgentUsesToolsAndValidatesReport(t *testing.T) {
 	}
 	if g.Metrics.ModelTurns != 2 || g.Metrics.ToolCalls != 2 {
 		t.Fatalf("missing metrics: %+v", g.Metrics)
+	}
+}
+
+func TestProviderErrorExplainsFailureWithoutLeakingKey(t *testing.T) {
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(400)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"message": "Unsupported parameter for this model. Token personal-secret."}})
+	}))
+	defer provider.Close()
+	_, err := callModel(context.Background(), "personal-secret", "model", provider.URL, []chatMessage{{Role: "user", Content: "test"}}, tools, "required")
+	if err == nil || !strings.Contains(err.Error(), "Unsupported parameter") || strings.Contains(err.Error(), "personal-secret") {
+		t.Fatalf("wrong provider error: %v", err)
 	}
 }

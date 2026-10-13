@@ -72,7 +72,21 @@ func callModel(ctx context.Context, key, model, baseURL string, messages []chatM
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("Model provider returned HTTP %d. Check the API key and model configuration.", resp.StatusCode)
+		var failure struct {
+			Error struct {
+				Message string `json:"message"`
+				Code    string `json:"code"`
+			} `json:"error"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 16384)).Decode(&failure)
+		message := strings.TrimSpace(redactCI(failure.Error.Message, key))
+		if len(message) > 1000 {
+			message = message[:1000]
+		}
+		if message == "" {
+			message = "Check your provider settings and retry."
+		}
+		return nil, fmt.Errorf("Model provider returned HTTP %d: %s", resp.StatusCode, message)
 	}
 	var result chatResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&result); err != nil {
