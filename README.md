@@ -1,35 +1,25 @@
 # Issue Lens
 
-Investigate GitHub issues and failed CI runs with source-linked AI reports.
+AI investigations for public GitHub issues and failed GitHub Actions runs.
 
-[Try Issue Lens](https://issuelens.me)
+[Live app](https://issuelens.me)
 
-## What It Does
+## Features
 
-- **Issue Investigator:** reads bug reports, related issues, and repository code to prepare findings and a response draft.
-- **CI Failure Investigator:** reads failed GitHub Actions steps, logs, workflow configuration, and commit changes to suggest a diagnosis and verification steps.
-- Saves private investigation history, evidence, and reports for each account.
-- Supports draft review and Markdown export. Nothing is posted to GitHub automatically.
-
-Choose an agent on **New investigation**, paste its GitHub URL, and review the report. Add your own OpenAI key or GitHub token in **Connections** when needed.
+- **Issue agent:** investigates bug reports using related issues and commit-pinned code.
+- **CI agent:** analyzes failed steps, logs, workflows, and commit changes.
+- Source-linked reports, private history, draft review, and Markdown export.
+- Bring your own OpenAI key and GitHub token through Connections.
 
 ## Stack
 
-Go, TypeScript, SQLite, Clerk, and OpenAI API. Docker Compose and Caddy run the app on AWS EC2 behind Cloudflare. GitHub Actions handles tests and deployment.
+Go backend, TypeScript frontend, SQLite, Clerk, and OpenAI. Deployed on AWS EC2 with Docker Compose, Caddy, Cloudflare, and GitHub Actions.
 
-Both agents run inside the same Go backend:
+## Local Setup
 
-```text
-Browser -> Go API -> GitHub evidence -> AI tool loop -> Cited report
-              |                                         |
-            Clerk                                    SQLite
-```
+Requires Go 1.25, Node.js 22.6+, and a C compiler.
 
-## Run Locally
-
-Requires Go 1.25, a C compiler for SQLite, and Node.js 22.6 or newer.
-
-Create `backend/.env` with your Clerk development settings:
+Create `backend/.env`:
 
 ```dotenv
 CLERK_PUBLISHABLE_KEY=pk_test_...
@@ -38,29 +28,19 @@ OPENAI_API_KEY=
 GITHUB_TOKEN=
 ```
 
-Provider keys are optional: you can add them through Connections. Without an OpenAI key, runs collect evidence in retrieval-only mode. Some CI logs require a GitHub token with Actions read and Contents read access.
-
 ```bash
 npm ci --prefix web
 make run
 ```
 
-Open [localhost:8765](http://127.0.0.1:8765). Run `make test check` for the build, TypeScript checks, and Go race tests.
+Open [localhost:8765](http://127.0.0.1:8765). Run checks with `make test check`.
 
-## Limits And Privacy
+## Limits
 
-- Public repositories only. Code is read, never executed; proposed fixes are not verified.
-- Searches and log excerpts are bounded. Citations need human review and do not prove a root cause.
-- The shared AI key allows one run per hour across the service. Your own key bypasses that allowance; provider and worker limits still apply.
-- Connection keys stay in account-scoped browser-tab storage and are not saved with reports. In AI mode, collected evidence is sent to the model provider.
-- Common credentials in CI evidence are redacted, but detection is not exhaustive.
+Public repositories only. No code execution or automatic GitHub posting. Reports require human review. Without an OpenAI key, runs collect evidence only. The shared AI key allows one run per hour; personal keys bypass this allowance. Some CI logs require a GitHub token with read access.
 
-## Deploy
+Connection keys stay in browser-tab storage, not the report database. AI mode sends collected evidence to the provider. CI credential redaction is not exhaustive.
 
-Configure the EC2 environment using [infra/.env.example](infra/.env.example), then run:
+## Deployment
 
-```bash
-bash infra/deploy.sh issuelens-ec2
-```
-
-Passing pushes to `main` also deploy through GitHub Actions. The production environment requires `DEPLOY_HOST`, `DEPLOY_SSH_KEY`, and `DEPLOY_KNOWN_HOSTS`. Keep `.env` files out of Git.
+See [infra/.env.example](infra/.env.example). Passing pushes to `main` deploy through GitHub Actions using `DEPLOY_HOST`, `DEPLOY_SSH_KEY`, and `DEPLOY_KNOWN_HOSTS`.
