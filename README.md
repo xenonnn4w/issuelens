@@ -15,7 +15,8 @@ AI investigations for public GitHub issues and failed GitHub Actions runs.
 
 Go backend, TypeScript frontend, SQLite, Clerk, and OpenAI. Deployed on AWS EC2 with Docker Compose, Caddy, Cloudflare, and GitHub Actions.
 
-<img width="617" height="2591" alt="Issue Lens Architecture" src="https://github.com/user-attachments/assets/c49e6c16-3903-4df6-9fa3-6e6a59c9c740" />
+<img width="609" height="2387" alt="Issue Lens Architecture" src="https://github.com/user-attachments/assets/00c33940-ed4c-4ba3-a826-cbaa0f7e2aa6" />
+
 
 
 ## Local Setup
