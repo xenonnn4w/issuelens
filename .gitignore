@@ -5,3 +5,4 @@ __pycache__/
 .pytest_cache/
 node_modules/
 web/out/static/*.js
+web/out/static/build/

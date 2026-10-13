@@ -29,7 +29,12 @@ func testServer(t *testing.T) *Server {
 func TestHomeAndAPI(t *testing.T) {
 	s := testServer(t)
 	h := s.handler()
-	for _, p := range []string{"/", "/privacy", "/favicon.svg", "/static/app.js", "/static/new.css", "/static/notice.css", "/static/mobile.css", "/api/config", "/api/usage", "/api/runs", "/healthz"} {
+	entries, err := filepath.Glob("../web/out/static/build/app-*.js")
+	if err != nil || len(entries) == 0 {
+		t.Fatal("Missing built application entry")
+	}
+	entry := "/static/build/" + filepath.Base(entries[len(entries)-1])
+	for _, p := range []string{"/", "/privacy", "/favicon.svg", entry, "/static/new.css", "/static/notice.css", "/static/mobile.css", "/api/config", "/api/usage", "/api/runs", "/healthz"} {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest("GET", p, nil))
 		if w.Code != 200 {

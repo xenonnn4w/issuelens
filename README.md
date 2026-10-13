@@ -44,7 +44,7 @@ Prepare `/opt/issue-lens/infra/.env` from `infra/.env.example` on the EC2 host. 
 bash infra/deploy.sh issuelens-ec2
 ```
 
-The GitHub Actions workflow typechecks and builds the web package, runs Go tests, and deploys passing `main` pushes. The browser bundle is generated during deployment, not stored in Git. The `production` environment needs `DEPLOY_HOST`, `DEPLOY_SSH_KEY`, and `DEPLOY_KNOWN_HOSTS`. The deploy script synchronizes source without copying local secrets and waits for both services to become healthy.
+The GitHub Actions workflow typechecks and builds the web package, runs Go tests, and deploys passing `main` pushes. The browser modules are generated during deployment, not stored in Git. The small application entry dynamically imports authentication modules. Content-hashed modules under `/static/build/` are cached for one year; HTML remains uncached and CSS revalidates. Previous module files remain available during deployments for open browser sessions. The `production` environment needs `DEPLOY_HOST`, `DEPLOY_SSH_KEY`, and `DEPLOY_KNOWN_HOSTS`. The deploy script synchronizes source without copying local secrets and waits for both services to become healthy.
 
 ## Limits
 

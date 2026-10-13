@@ -5,8 +5,7 @@ import {
   Menu, PanelLeftClose, Plus, RefreshCw, Save, ScanSearch, ShieldCheck,
   Sparkles, TerminalSquare, Trash2, X,
 } from 'lucide';
-import { Clerk } from '@clerk/clerk-js';
-import { ClerkUI } from '@clerk/ui/entry';
+import type { Clerk } from '@clerk/clerk-js';
 
 const iconSet = {
   ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, ChartNoAxesCombined,
@@ -294,7 +293,10 @@ async function boot() {
   icons();
   document.body.classList.toggle('auth-required', location.pathname.startsWith('/sign-'));
   try {
-    config = await api<Config>('/config');
+    const [loadedConfig, {Clerk}, {ClerkUI}] = await Promise.all([
+      api<Config>('/config'), import('@clerk/clerk-js'), import('@clerk/ui/entry'),
+    ]);
+    config = loadedConfig;
     if (!config.clerk_publishable_key) throw new Error('Clerk is not configured on this server.');
     clerk = new Clerk(config.clerk_publishable_key);
     await clerk.load({ui:{ClerkUI}, signInUrl:'/sign-in', signUpUrl:'/sign-up'});

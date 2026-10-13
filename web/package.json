@@ -1,8 +1,9 @@
 {
   "name": "issue-lens-web",
   "private": true,
+  "type": "module",
   "scripts": {
-    "build": "npm run typecheck && esbuild src/app.ts --bundle --format=iife --target=es2022 --minify --outfile=out/static/app.js",
+    "build": "npm run typecheck && node --experimental-strip-types build.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {

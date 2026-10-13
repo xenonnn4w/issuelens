@@ -9,5 +9,5 @@ test: web-build
 	cd backend && $(GO) test -race ./...
 check: web-build
 	cd backend && test -z "$$($(GO) fmt ./...)"
-	node --check web/out/static/app.js
+	find web/out/static/build -name '*.js' -exec node --check {} \;
 	bash -n infra/deploy.sh
