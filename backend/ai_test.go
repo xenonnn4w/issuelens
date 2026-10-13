@@ -20,6 +20,25 @@ func TestAgentUsesToolsAndValidatesReport(t *testing.T) {
 			t.Error("wrong run-scoped key")
 		}
 		turns++
+		if turns == 2 {
+			var request struct {
+				Messages []chatMessage `json:"messages"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, message := range request.Messages {
+				for _, call := range message.ToolCalls {
+					if call.Type == "function" {
+						found = true
+					}
+				}
+			}
+			if !found {
+				t.Error("Assistant tool-call type was lost before the second model request")
+			}
+		}
 		name := "search_paths"
 		args := map[string]any{"query": "cache"}
 		if turns == 2 {
@@ -27,7 +46,7 @@ func TestAgentUsesToolsAndValidatesReport(t *testing.T) {
 			args = map[string]any{"summary": "Cache behavior needs investigation.", "findings": []map[string]any{{"claim": "The issue reports a cache miss.", "confidence": "low", "evidence_ids": []string{"E1"}}}, "questions": []string{"Which version?"}, "limitations": []string{"Not reproduced"}, "draft": "Please provide reproduction steps."}
 		}
 		encoded, _ := json.Marshal(args)
-		_ = json.NewEncoder(w).Encode(map[string]any{"usage": map[string]int{"prompt_tokens": 10, "completion_tokens": 5}, "choices": []map[string]any{{"message": map[string]any{"role": "assistant", "tool_calls": []map[string]any{{"id": "call", "function": map[string]any{"name": name, "arguments": string(encoded)}}}}}}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"usage": map[string]int{"prompt_tokens": 10, "completion_tokens": 5}, "choices": []map[string]any{{"message": map[string]any{"role": "assistant", "tool_calls": []map[string]any{{"id": "call", "type": "function", "function": map[string]any{"name": name, "arguments": string(encoded)}}}}}}})
 	}))
 	defer model.Close()
 	report, mode, err := investigate(context.Background(), g, func(string, string) {}, "auto", "personal-key", "gpt-4.1-mini", model.URL)
